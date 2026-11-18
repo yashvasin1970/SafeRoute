@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SafeRoute · {{ area.name }}</title>
+  <meta name="description" content="Evacuation routes to the nearest open shelter, around blocked roads, updated live.">
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip" href="#panel">Skip to controls</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <img src="{{ url_for('static', filename='icon.svg') }}" alt="" width="28" height="28">
+      <span class="brand-name">SafeRoute</span>
+      <span class="brand-area">{{ area.name }}</span>
+    </div>
+    <div class="live" id="live" role="status">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span id="live-text">Connecting…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div class="map-wrap">
+      <div id="map" aria-label="Evacuation map. Tap where you are to get a route."></div>
+      <div class="legend" aria-hidden="true">
+        <div><span class="key key-route"></span>Your route</div>
+        <div><span class="key key-closed"></span>Blocked road</div>
+        <div><span class="key key-scenario"></span>Test closure</div>
+        <div><span class="key key-shelter"></span>Shelter</div>
+        <div><span class="key key-sensor"></span>Flood sensor</div>
+      </div>
+    </div>
+
+    <aside class="panel" id="panel">
+      <nav class="tabs" role="tablist" aria-label="Who are you?">
+        <button role="tab" id="tab-btn-route" aria-controls="tab-route" aria-selected="true" data-tab="route">Find a route</button>
+        <button role="tab" id="tab-btn-respond" aria-controls="tab-respond" aria-selected="false" data-tab="respond" tabindex="-1">Responders</button>
+        <button role="tab" id="tab-btn-plan" aria-controls="tab-plan" aria-selected="false" data-tab="plan" tabindex="-1">Planners</button>
+      </nav>
+
+      <!-- Residents -->
+      <section class="tab" id="tab-route" role="tabpanel" aria-labelledby="tab-btn-route">
+        <p class="lead">Tap the map where you are. SafeRoute finds the nearest open shelter you can still reach, using only roads that are open right now.</p>
+
+        <div class="field-row">
+          <div class="segmented" role="radiogroup" aria-label="How are you travelling?" data-mode-group="route">
+            <button type="button" role="radio" aria-checked="true" data-mode="foot">On foot</button>
+            <button type="button" role="radio" aria-checked="false" data-mode="vehicle">By vehicle</button>
+          </div>
+          <button type="button" class="btn btn-quiet" id="locate">Use my location</button>
+        </div>
+
+        <label class="field">
+          <span>Or pick the street you are on</span>
+          <select id="street"><option value="">Choose a street…</option></select>
+        </label>
+
+        <div class="banner" id="route-banner" role="alert" hidden></div>
+        <div id="route-result" aria-live="polite">
+          <div class="empty">
+            <strong>No location yet</strong>
+            <span>Tap anywhere on the map, use your location or pick your street.</span>
+          </div>
+        </div>
+
+        <h2 class="section-title">Shelters</h2>
+        <ul class="list" id="shelter-list"></ul>
+      </section>
+
+      <!-- Responders -->
+      <section class="tab" id="tab-respond" role="tabpanel" aria-labelledby="tab-btn-respond" hidden>
+        <form id="login-form" class="card" autocomplete="off">
+          <h2 class="card-title">Responder sign-in</h2>
+          <p class="muted">Only authorised responders can mark roads blocked or change a shelter's status.</p>
+          <label class="field"><span>Your name or unit</span><input id="login-name" name="name" maxlength="60" required placeholder="e.g. NDRF Team 4"></label>
+          <label class="field"><span>Responder passcode</span><input id="login-passcode" name="passcode" type="password" inputmode="numeric" required></label>
+          <p class="error" id="login-error" role="alert" hidden></p>
+          <button class="btn btn-primary" type="submit">Sign in</button>
+        </form>
+
+        <div id="responder-tools" hidden>
+          <div class="signed-in">
+            <span>Signed in as <strong id="responder-name"></strong></span>
+            <button type="button" class="btn btn-quiet btn-small" id="logout">Sign out</button>
+          </div>
+          <ul class="tips">
+            <li><strong>Tap a road</strong> to mark it blocked.</li>
+            <li><strong>Tap a red road</strong> to reopen it.</li>
+            <li><strong>Tap a shelter</strong> to mark it open, full or closed.</li>
+          </ul>
+          <p class="muted">Every change reaches every open map within a few seconds, and routes update straight away.</p>
+          <h2 class="section-title">Blocked roads <span class="count" id="closure-count">0</span></h2>
+          <ul class="list" id="closure-list"></ul>
+          <button type="button" class="btn btn-danger-quiet" id="reset">Reset demo</button>
+        </div>
+      </section>
+
+      <!-- Planners -->
+      <section class="tab" id="tab-plan" role="tabpanel" aria-labelledby="tab-btn-plan" hidden>
+        <p class="lead">Test closures before they happen. Tap roads or shelters to add them to a scenario. <strong>Nothing here is published</strong> and the live map is not changed.</p>
+        <div class="field-row">
+          <div class="segmented" role="radiogroup" aria-label="Travel mode for the test" data-mode-group="plan">
+            <button type="button" role="radio" aria-checked="true" data-mode="foot">On foot</button>
+            <button type="button" role="radio" aria-checked="false" data-mode="vehicle">By vehicle</button>
+          </div>
+          <label class="toggle"><input type="checkbox" id="coverage" checked> Colour roads by time to shelter</label>
+        </div>
+        <div class="scale" id="scale" aria-hidden="true">
+          <span class="s1">≤ 5 min</span><span class="s2">≤ 10</span><span class="s3">≤ 20</span><span class="s4">&gt; 20</span><span class="s5">Cut off</span>
+        </div>
+        <div id="impact" aria-live="polite"></div>
+        <h2 class="section-title">Scenario <span class="count" id="scenario-count">0</span></h2>
+        <ul class="list" id="scenario-list"></ul>
+        <button type="button" class="btn btn-quiet" id="scenario-clear">Clear scenario</button>
+      </section>
+
+      <section class="activity">
+        <h2 class="section-title">Activity</h2>
+        <ol class="events" id="events"></ol>
+      </section>
+
+      <footer class="note">
+        Road data © OpenStreetMap contributors. Shelters and sensors are sample data for this demo.
+        SafeRoute is not a certified warning system. In an emergency, call <strong>112</strong>.
+      </footer>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

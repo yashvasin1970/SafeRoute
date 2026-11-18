@@ -1,0 +1,211 @@
+# SafeRoute
+
+**Real-time evacuation routing around blocked roads.** Smart India Hackathon 2026, problem statement
+DM03 *Blocked Evacuation Route Finder* (Disaster Management), team AstroSync.
+
+A resident taps where they are and gets the fastest route to the nearest open shelter, using only roads
+that are open right now. When a responder marks a road blocked, or a flood sensor detects rising
+water, every open map reroutes within seconds. Shelters that are full, closed or cut off are listed
+but never suggested.
+
+The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (927 junctions,
+1,130 road segments), an area that floods often.
+
+| | |
+|---|---|
+| Stack | Python 3.11+, Flask, NetworkX (Dijkstra), SQLite, Leaflet.js, OpenStreetMap / OSMnx |
+| Runtime dependencies | 3 (Flask, NetworkX, python-dotenv). OSMnx is only needed to build a new area |
+| Tests | 64 automated tests (`pytest`), lint and format checks (`ruff`) |
+| Speed | A route takes ~30 ms; a planner what-if over every junction takes ~40 ms on a laptop |
+
+---
+
+## What it does
+
+**Residents: "Find a route"**
+- Tap the map, use your location, or pick your street from a list (handy without GPS).
+- Choose *On foot* or *By vehicle*. You get the shelter, ETA, distance and turn-by-turn streets.
+- Every shelter is listed with its status: open with ETA, *Full*, *Closed* or *Cut off by blocked roads*.
+- The route **updates by itself** when conditions change, with a banner explaining why
+  ("Velachery Main Road was just blocked. Now 14 min to SAN Academy.").
+- If no open shelter can be reached, it says so plainly and gives safety advice and the 112 emergency number.
+
+**Responders: "Responders"**
+- Sign in with your name or unit and the responder passcode. Only signed-in responders can change the map.
+- Tap a road to mark it blocked (Flooded, Fallen tree, Debris or collapse, Fire, Accident, Other); tap a red road to reopen it.
+- Tap a shelter to mark it *Open*, *Full* or *Closed*.
+- Every change is logged with who made it and when, in an **Activity** feed everyone can see.
+
+**Planners: "Planners"**
+- Try closures *before* they happen: tap roads and shelters to build a scenario. **Nothing is published.**
+- See live vs. scenario side by side: junctions that can reach a shelter, junctions cut off, average
+  time, the time within which 9 in 10 people reach safety, and the slowest junction.
+- Colour every road by its time to the nearest shelter (≤5, ≤10, ≤20, >20 min, cut off).
+
+**IoT flood sensors**
+- Water-level sensors post readings over HTTP with a device key.
+- At **30 cm** (enough to float a car) a sensor closes every road within 80 m of it; below **15 cm** it reopens them.
+- It never reopens a road a responder closed, and if a responder overrides a sensor (for example a
+  faulty one) the sensor stays quiet until the water drops. People have the final say.
+- `scripts/simulate_sensors.py` plays a storm so you can watch roads close and reopen live.
+
+## How it follows the proposal
+
+The method from the idea submission maps directly onto the code:
+
+| Proposal step | Where |
+|---|---|
+| Load road network | `scripts/build_graph.py` builds `data/velachery.json` from OpenStreetMap with OSMnx; `saferoute/network.py` loads it into a NetworkX graph |
+| Mark blocked roads | Responders (`POST /api/closures`) and flood sensors (`POST /api/sensors/<id>/readings`), stored in SQLite |
+| Remove closed edges | `routing.open_roads()` returns a filtered **view** of the graph: nothing is copied or mutated |
+| Shortest path to shelter | `routing.find_route()`: Dijkstra over travel time from the person's junction, skipping full, closed and unreachable shelters |
+| Show route + ETA | Leaflet map with the route, ETA, distance and street-by-street steps, refreshed live |
+
+## Run it
+
+Needs Python 3.11 or newer.
+
+```powershell
+# Windows (PowerShell)
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m saferoute
+```
+
+```bash
+# macOS / Linux
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m saferoute
+```
+
+Open <http://127.0.0.1:5050>. The terminal prints the **responder passcode**. On first run SafeRoute
+generates a random passcode, sensor device key and session secret and keeps them in
+`instance/secrets.json`. To choose your own, copy `.env.example` to `.env` and fill it in.
+
+## Demo script (about 3 minutes)
+
+1. **Resident.** On *Find a route*, pick *Sastri Road* from the street list. A blue route appears to the nearest shelter with its ETA.
+2. **Responder.** Open the same address in a second window, go to *Responders*, sign in, and tap a road on that route. Choose *Flooded*.
+3. **Watch the first window.** Within three seconds the road turns red, the route goes around it, and a banner explains why.
+4. **Sensors.** In a terminal, run `python scripts/simulate_sensors.py`. Water rises at four sensors; Taramani Link Road and Velachery Main Road flood and close by themselves, then reopen as the water recedes.
+5. **Planner.** On *Planners*, tap two or three roads near a shelter. The table shows how many junctions would be cut off and how much longer evacuation would take, without changing the live map.
+6. **Reset.** *Responders → Reset demo* reopens everything.
+
+## How it works
+
+```
+ Browser (Leaflet)                     Flask API                            Engine (pure Python)
+ ─────────────────                     ─────────                            ────────────────────
+ resident taps map  ── POST /api/route ──▶ snap to junction ─────────────▶ find_route(): Dijkstra on
+                                           read closures + shelters        open_roads() view
+ every 3 s          ── GET /api/state?since=v ─▶ 204 if nothing changed
+ responder action   ── POST /api/closures ──▶ SQLite (+ version bump, activity log)
+ planner scenario   ── POST /api/impact ──▶ (read-only) ──────────────────▶ coverage(): multi-source
+                                                                            Dijkstra from all shelters
+ flood sensor       ── POST /api/sensors/<id>/readings ──▶ sensors.decide() per road ──▶ SQLite
+```
+
+- **Travel time, not just distance.** Each road has a walking time (4 km/h) and a driving time by
+  road class (primary 30 km/h down to 10 km/h on living streets, well below normal limits because
+  roads are crowded during an evacuation). Dijkstra minimises time; on foot that is the shortest path.
+- **Nearest reachable shelter.** One Dijkstra run from the person's junction gives the time to every
+  shelter at once, so the app can explain why each shelter was or wasn't chosen.
+- **Coverage for planners.** A single *multi-source* Dijkstra from all open shelters gives every
+  junction's time to its nearest shelter. Roads are undirected, so shelter→junction equals junction→shelter.
+- **Live updates.** Every change bumps a version number in the same database transaction. Browsers poll
+  `?since=<version>` every 3 seconds and get an empty `204` unless something changed.
+- **Works with a weak connection.** Roads, closures, routes and shelters are drawn from local data. The
+  OpenStreetMap basemap is optional decoration; if tiles fail to load, the map still works.
+
+## Build another area
+
+```bash
+pip install -r requirements-osm.txt
+# 1. On openstreetmap.org, zoom to a small area and click Export to download map.osm
+# 2. Build the area file
+python scripts/build_graph.py --name "My Area" --xml map.osm --out data/my_area.json
+```
+
+Or fetch straight from an Overpass API server with `--lat --lon --dist` (and `--overpass <url>` to
+pick a server). Point the app at the new file with the `AREA_FILE` setting in `create_app`.
+Shelters are picked from mapped schools, colleges and community halls; replace them with the
+official relief-camp list for a real deployment.
+
+## API
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| GET | `/api/area` | anyone | Roads, junctions, shelters, sensors (cached, revalidated by ETag) |
+| GET | `/api/state?since=<v>` | anyone | Closures, shelter status, sensor levels, activity; `204` if unchanged |
+| POST | `/api/route` | anyone | `{lat, lon, mode}` → route, ETA, steps, every shelter's status |
+| POST | `/api/impact` | anyone | `{mode, closures, shelters_closed}` → live vs. scenario coverage (publishes nothing) |
+| GET | `/api/session` | anyone | Current responder and CSRF token |
+| POST | `/api/responder/login` / `logout` | responders | `{name, passcode}` |
+| POST / DELETE | `/api/closures`, `/api/closures/<road>` | responders | Mark a road blocked / reopen it |
+| POST | `/api/shelters/<id>` | responders | `{status: open\|full\|closed}` |
+| POST | `/api/reset` | responders | Clear all closures and readings (demo) |
+| POST | `/api/sensors/<id>/readings` | devices | `{level_cm}` with header `X-Device-Key` |
+
+## Security
+
+- **Only authorised responders change the map** (the proposal's mitigation for false reports). Shared
+  passcode compared in constant time; 5 wrong attempts per 5 minutes per address, then a lock-out.
+- **CSRF protection** on every responder change (token in a header), `SameSite=Lax`, `HttpOnly` session cookie, 12-hour sessions.
+- **Sensors authenticate** with a device key, separate from the responder passcode.
+- **No secrets in the code.** Generated on first run, or set through environment variables.
+- **Strict Content Security Policy** (no inline scripts or styles, no third-party scripts), plus
+  `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: no-referrer`. Leaflet is bundled locally and
+  matches the official SRI hashes for 1.9.4.
+- **All input is validated** (types, ranges, known road and shelter ids, request size capped at 64 KB),
+  and the page inserts server text with `textContent`, never as HTML.
+- **Planner what-ifs are read-only** and cannot change the live map.
+
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest          # 64 tests
+ruff check . && ruff format --check .
+```
+
+The tests use a six-junction town where every answer can be checked by hand (see `tests/conftest.py`):
+closures avoided, unreachable and full shelters skipped, ETAs, step merging, route direction, coverage
+and impact numbers, every sensor rule (including the hysteresis and the responder override), the
+store, every API endpoint, authentication, CSRF, rate limiting and input validation. A final test
+checks that every junction in the real Velachery sample can reach a shelter.
+
+## Project structure
+
+```
+saferoute/
+  network.py      Road graph, shelters and sensors loaded from an area file
+  routing.py      Closure-aware routing, coverage and what-if impact (pure functions)
+  sensors.py      Flood sensor thresholds and decisions (pure functions)
+  store.py        SQLite: closures, shelter status, sensor readings, activity log, version
+  api.py          HTTP API
+  security.py     Secrets, sign-in, CSRF, rate limiting, security headers
+  templates/      The single page
+  static/         app.js (map client), app.css, bundled Leaflet
+scripts/
+  build_graph.py        OpenStreetMap → area file (OSMnx)
+  simulate_sensors.py   Pretend to be the flood sensors
+data/
+  velachery.json          Sample area built from OpenStreetMap on 2026-11-18
+  velachery.sensors.json  Sample sensor placements
+tests/
+```
+
+## Assumptions and limits
+
+- **Not a certified warning system.** It supports responders and does not replace official alerts.
+- **Sample data.** Shelters are mapped schools and halls picked as examples, not official
+  designations. Sensor positions are illustrative.
+- **Roads are two-way during an evacuation**, as responders usually control traffic. One-way rules
+  could be added from the OSM `oneway` tag.
+- **Closures are per road segment** (junction to junction), matching the graph model.
+- **Map data can be out of date**, so OpenStreetMap extracts should be refreshed regularly (as in the proposal).
+- **Basemap tiles** come from the OpenStreetMap Foundation's public tile server, which is fine for a
+  demo. A real deployment should use its own tile server or a commercial provider.
+
+Road data © OpenStreetMap contributors, available under the Open Database License.

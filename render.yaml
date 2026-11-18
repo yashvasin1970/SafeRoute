@@ -1,0 +1,26 @@
+# Render blueprint: a free, public demo of SafeRoute.
+# Deploy from the Render dashboard (New > Blueprint) and pick this repository.
+#
+# Render generates the responder passcode, sensor device key and session secret; find them under
+# the service's Environment tab. The free plan's disk is temporary, so every restart starts with a
+# clean map (no closures), which suits a demo.
+services:
+  - type: web
+    name: saferoute-demo
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # One worker keeps SQLite simple; threads handle concurrent visitors.
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 60 "saferoute:create_app()"
+    healthCheckPath: /healthz
+    envVars:
+      - key: SAFEROUTE_SECRET_KEY
+        generateValue: true
+      - key: SAFEROUTE_RESPONDER_PASSCODE
+        generateValue: true
+      - key: SAFEROUTE_SENSOR_KEY
+        generateValue: true
+      - key: SAFEROUTE_TRUST_PROXY
+        value: "1"
+      - key: SAFEROUTE_SECURE_COOKIES
+        value: "1"

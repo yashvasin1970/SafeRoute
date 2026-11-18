@@ -1,0 +1,5 @@
+flask>=3.0,<4
+networkx>=3.2,<4
+python-dotenv>=1.0,<2
+# Production server for Linux hosts (Render, containers). Windows uses the built-in server.
+gunicorn>=23; platform_system != "Windows"

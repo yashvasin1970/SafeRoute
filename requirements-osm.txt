@@ -1,0 +1,2 @@
+# Build road graphs for other areas from OpenStreetMap (only needed for scripts/build_graph.py)
+osmnx>=2.0

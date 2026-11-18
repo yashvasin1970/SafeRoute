@@ -1,0 +1,9 @@
+{
+  "note": "Sample water-level sensor placements for the demo, on roads that commonly flood. Each sensor closes every road segment within radius_m (default 80 m) when water reaches 30 cm.",
+  "sensors": [
+    {"id": "FS-01", "road": "r281", "label": "Velachery Main Road", "lat": 12.98224, "lon": 80.221719},
+    {"id": "FS-02", "road": "r737", "label": "Taramani Link Road", "lat": 12.976993, "lon": 80.222763},
+    {"id": "FS-03", "road": "r903", "label": "Velachery Bypass Road", "lat": 12.980494, "lon": 80.218259},
+    {"id": "FS-04", "road": "r564", "label": "Ram Nagar Main Road", "lat": 12.973021, "lon": 80.216419}
+  ]
+}
