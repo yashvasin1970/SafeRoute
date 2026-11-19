@@ -222,3 +222,23 @@ def test_installable_app_files(client):
     assert worker.headers["Cache-Control"] == "no-cache"
     page = client.get("/").data
     assert b'rel="manifest"' in page and b"apple-touch-icon" in page
+
+
+def test_text_responses_are_gzipped_for_slow_connections(client):
+    import gzip
+
+    plain = client.get("/api/area")
+    zipped = client.get("/api/area", headers={"Accept-Encoding": "gzip, deflate, br"})
+    assert zipped.headers["Content-Encoding"] == "gzip"
+    assert "Accept-Encoding" in zipped.headers["Vary"]
+    assert json.loads(gzip.decompress(zipped.data)) == plain.json
+    assert len(zipped.data) < len(plain.data)
+
+    script = client.get("/static/app.js", headers={"Accept-Encoding": "gzip"})
+    assert script.headers["Content-Encoding"] == "gzip"
+    assert b"SafeRoute map client" in gzip.decompress(script.data)
+
+    tiny = client.get("/healthz", headers={"Accept-Encoding": "gzip"})  # under 1 KB: left alone
+    assert "Content-Encoding" not in tiny.headers
+    icon = client.get("/static/icons/icon-192.png", headers={"Accept-Encoding": "gzip"})  # already compressed
+    assert "Content-Encoding" not in icon.headers

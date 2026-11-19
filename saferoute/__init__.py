@@ -14,6 +14,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .api import bp as api_bp
+from .compression import add_compression
 from .network import RoadNetwork
 from .security import AttemptLimiter, add_security_headers, load_secrets
 from .store import Store
@@ -69,6 +70,8 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.extensions["saferoute.login_limiter"] = AttemptLimiter(limit=5, window_s=300)
 
     app.register_blueprint(api_bp)
+    # Registered first so it runs last: compress the final body, after headers are set.
+    add_compression(app)
     add_security_headers(app)
 
     @app.get("/")
