@@ -120,6 +120,26 @@ STEPS = (
 )
 
 
+# A one-click heavy-flood scenario for demos and drills, in the spirit of Cyclone Michaung (2023),
+# when Velachery was among the worst-hit areas. It is illustrative: it floods the stretches around
+# the sample sensors, not a record of the roads that actually closed.
+FLOOD_SCENARIO_SENSORS = ("FS-01", "FS-02", "FS-03")
+FLOOD_SCENARIO = (
+    ("weather", 60, 18),
+    ("sensor", "FS-02", 38),
+    ("sensor", "FS-01", 34),
+    ("sensor", "FS-03", 32),
+    ("sensor", "FS-04", 24),
+    ("occupancy", "s2", 240),
+    ("occupancy", "s1", 120),
+    ("occupancy", "s3", 150),
+    ("occupancy", "s4", 180),
+    ("occupancy", "s5", 90),
+    ("report", "ram_nagar", "flooding", 12.97305, 80.21650, "Water entering houses, knee deep", "app"),
+    ("report", "rescue", "rescue", 12.98045, 80.21840, "Elderly couple, ground floor flooded", "sms"),
+)
+
+
 class StoryRunner:
     """Plays STEPS one at a time on a background thread (or synchronously in tests)."""
 
@@ -130,6 +150,7 @@ class StoryRunner:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._ids: dict[str, int] = {}
+        self.on_change: Callable[[], None] | None = None  # e.g. wake the SMS alerter
 
     @property
     def running(self) -> bool:
@@ -148,6 +169,29 @@ class StoryRunner:
         self._thread.start()
         return True
 
+    def flood_scenario(self, actor: str) -> None:
+        """Load the heavy-flood scenario at once (resets the demo first)."""
+        self.stop()
+        self.store.reset(actor)
+        self._ids = {}
+        for action in FLOOD_SCENARIO:
+            self._apply(action)
+        self.store.set_feed(
+            "scenario",
+            {"name": "flood"},
+            actor=actor,
+            action="scenario",
+            detail="heavy-flood scenario loaded (Michaung-style, illustrative)",
+        )
+        if self.on_change:
+            self.on_change()
+
+    def flood_roads(self) -> list[str]:
+        """The roads the flood scenario closes, for the planner to test without publishing."""
+        return sorted(
+            {r for s in FLOOD_SCENARIO_SENSORS if s in self.network.sensors for r in self.network.sensors[s].roads}
+        )
+
     def stop(self) -> None:
         self._stop.set()
         self.weather.stop_drill()
@@ -160,6 +204,8 @@ class StoryRunner:
                 return
             for action in step.actions:
                 self._apply(action)
+            if self.on_change and step.actions:
+                self.on_change()
             self.store.set_feed(
                 "story",
                 {

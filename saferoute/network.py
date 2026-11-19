@@ -57,6 +57,11 @@ class Shelter:
     lon: float
     node: int
     capacity: int = DEFAULT_CAPACITY
+    short: str = ""  # a short name for SMS, where every character counts
+
+    @property
+    def sms_name(self) -> str:
+        return self.short or (self.name if len(self.name) <= 20 else self.name[:19] + "…")
 
 
 @dataclass(frozen=True)
@@ -132,7 +137,8 @@ class RoadNetwork:
             capacity = int(shelter_info.get(s["id"], {}).get("capacity", s.get("capacity", DEFAULT_CAPACITY)))
             if capacity <= 0:
                 raise ValueError(f"shelter {s['id']} needs a positive capacity")
-            self.shelters[s["id"]] = Shelter(**{**s, "capacity": capacity})
+            short = shelter_info.get(s["id"], {}).get("short", s.get("short", ""))
+            self.shelters[s["id"]] = Shelter(**{**s, "capacity": capacity, "short": short})
         self.sensors: dict[str, Sensor] = {}
         for s in sensors or []:
             if s["road"] not in self.roads:

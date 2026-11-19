@@ -1,22 +1,25 @@
-"""Plain-text SMS commands, for people with no data connection or a basic phone.
+"""Plain-text SMS, for people with no data connection or a basic phone.
 
-    ROUTE <street>      the way to the nearest open shelter, on foot
-    SHELTERS            which shelters are open and how full they are
-    FLOOD <street>      report flooding (unverified until a responder checks it)
-    HELP <street>       ask to be rescued
-    STATUS              roads blocked and the rain forecast
+    ROUTE <street>   the way to the best open shelter, on foot
+    JOIN <street>    alerts for your street (STOP to end)
+    SHELTERS         which shelters are open and how full they are
+    SAFE             tell responders you are safe (also pauses alerts)
+    FLOOD <street>   report flooding (unverified until a responder checks it)
+    HELP <street>    ask to be rescued
+    STATUS           roads blocked and the rain forecast
 
-Commands also work in Tamil and Hindi (வழி / रास्ता, முகாம் / शिविर, வெள்ளம் / बाढ़,
-உதவி / मदद, நிலை / स्थिति) and the reply comes back in the same language. Street names
-are matched loosely, so "sastri rd" finds Sastri Road.
+Commands also work in Tamil and Hindi, and the reply comes back in the same language. Street
+names are matched loosely, so "sastri rd" finds Sastri Road.
 
-``handle`` is pure apart from the callbacks it is given, so the same logic serves a real SMS
-gateway webhook and the in-app phone simulator.
+Messages in Tamil or Hindi travel as Unicode SMS, which fit 70 characters instead of 160, so every
+text here is kept short: replies and alerts aim for two Unicode segments at most. Shelters use their
+short SMS names for the same reason.
 """
 
 from __future__ import annotations
 
 import difflib
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,7 +27,10 @@ from dataclasses import dataclass
 from .network import RoadNetwork
 
 KEYWORDS = {
-    "route": {"ROUTE", "SAFE", "WAY", "வழி", "रास्ता"},
+    "route": {"ROUTE", "WAY", "வழி", "रास्ता"},
+    "join": {"JOIN", "START", "சேர்", "जुड़ें"},
+    "stop": {"STOP", "நிறுத்து", "रोकें"},
+    "safe": {"SAFE", "பாதுகாப்பு", "सुरक्षित"},
     "shelters": {"SHELTERS", "SHELTER", "CAMPS", "முகாம்", "முகாம்கள்", "शिविर"},
     "flood": {"FLOOD", "WATER", "வெள்ளம்", "बाढ़"},
     "help": {"HELP", "RESCUE", "SOS", "உதவி", "मदद", "बचाओ"},
@@ -32,65 +38,124 @@ KEYWORDS = {
 }
 LANG_PREFIX = {"EN": "en", "TA": "ta", "HI": "hi"}
 ABBREVIATIONS = {"rd": "road", "st": "street", "ext": "extension", "ave": "avenue", "mn": "main"}
+STEPS_PER_LANG = {"en": 3, "ta": 2, "hi": 2}
 
 TEXT = {
     "en": {
-        "route": "SafeRoute: Walk to {shelter}, {eta} min ({dist}). Way: {steps}. Need rescue? Reply HELP {street}",
-        "no_route": "SafeRoute: No open shelter can be reached from {street} now. Stay on high ground, call 112. "
-        "Reply HELP {street} for rescue.",
-        "help": "SafeRoute: Rescue request logged near {street} (#{id}). Responders can see it now. Stay on the "
-        "highest floor, keep your phone on. Emergency: 112",
-        "flood": "SafeRoute: Thank you. Flooding near {street} reported (#{id}). Responders will check it; routes "
-        "already avoid it.",
-        "shelters": "SafeRoute shelters: {list}. Reply ROUTE <your street> for directions.",
-        "status": "SafeRoute: {closed} road segments blocked. Rain: {rain}. Reply ROUTE <your street>.",
-        "unknown_street": "SafeRoute: Couldn't find '{query}'. Send a main road near you, e.g. ROUTE Sastri Road",
-        "usage": "SafeRoute: Send ROUTE <your street>, SHELTERS, FLOOD <street> or HELP <street>.",
+        "route": "SafeRoute: Walk to {shelter}, {eta} min ({dist}) via {steps}. Rescue: HELP {street}",
+        "no_route": "SafeRoute: No safe route from {street} now. Stay high, call 112. Rescue: HELP {street}",
+        "help": "SafeRoute: Rescue request #{id} near {street} sent to responders. Stay high, keep phone on. 112",
+        "flood": "SafeRoute: Flooding near {street} logged (#{id}). Routes now avoid it.",
+        "shelters": "SafeRoute shelters: {list}. Directions: ROUTE <street>",
+        "status": "SafeRoute: {closed} roads blocked. Rain: {rain}. Directions: ROUTE <street>",
+        "unknown_street": "SafeRoute: Can't find '{query}'. Try a main road, e.g. ROUTE Sastri Road",
+        "usage": "SafeRoute: Send ROUTE <street>, JOIN <street>, SHELTERS, SAFE or HELP <street>",
+        "need_phone": "SafeRoute: Send this from your own phone.",
+        "welcome": "SafeRoute alerts on for {street}. Now: {shelter}, {eta} min. Reply SAFE when safe, STOP to end.",
+        "stopped": "SafeRoute: Alerts stopped. JOIN <street> to restart.",
+        "not_joined": "SafeRoute: You had no alerts. JOIN <street> to start.",
+        "safe": "SafeRoute: Marked safe. Thank you. HELP <street> if that changes.",
+        "otp": "SafeRoute code {code}. Valid 10 min. Didn't ask? Ignore this.",
+        "alert_blocked": "SafeRoute ALERT: a road on your route is blocked. Go to {shelter}, {eta} min via {steps}.",
+        "alert_shelter": "SafeRoute ALERT: {old} is {state}. Go to {shelter}, {eta} min via {steps}.",
+        "alert_none": "SafeRoute ALERT: no safe route from {street}. Stay high, call 112. HELP {street}",
+        "alert_back": "SafeRoute: a route is open again. Go to {shelter}, {eta} min via {steps}.",
+        "state_full": "full",
+        "state_closed": "closed",
+        "state_cut": "cut off",
         "full": "{name} full",
-        "load": "{name} {pct}% full",
+        "load": "{name} {pct}%",
         "closed": "{name} closed",
         "rain": {"dry": "none", "light": "light", "moderate": "moderate", "heavy": "heavy", "extreme": "very heavy"},
         "rain_unknown": "unknown",
     },
     "ta": {
-        "route": "SafeRoute: அருகிலுள்ள திறந்த முகாம் {shelter}, நடந்து {eta} நிமிடம் ({dist}). வழி: {steps}. "
-        "மீட்பு தேவையா? அனுப்பவும்: உதவி {street}",
-        "no_route": "SafeRoute: {street} இலிருந்து இப்போது எந்த முகாமையும் அடைய முடியாது. உயரமான இடத்தில் "
-        "இருங்கள், 112 ஐ அழைக்கவும். மீட்புக்கு: உதவி {street}",
-        "help": "SafeRoute: {street} அருகே மீட்பு கோரிக்கை பதிவானது (#{id}). மீட்புக் குழுவினர் இதைப் "
-        "பார்க்கிறார்கள். மேல் தளத்தில் இருங்கள். அவசரம்: 112",
-        "flood": "SafeRoute: நன்றி. {street} அருகே வெள்ளம் பதிவானது (#{id}). மீட்புக் குழுவினர் சரிபார்ப்பார்கள்; "
-        "வழிகள் ஏற்கனவே அதைத் தவிர்க்கின்றன.",
-        "shelters": "SafeRoute முகாம்கள்: {list}. வழி அறிய: வழி <உங்கள் தெரு>",
-        "status": "SafeRoute: {closed} சாலைப் பகுதிகள் மூடப்பட்டுள்ளன. மழை: {rain}. வழி அறிய: வழி <உங்கள் தெரு>",
-        "unknown_street": "SafeRoute: '{query}' கிடைக்கவில்லை. அருகிலுள்ள முக்கிய சாலையை அனுப்பவும், எ.கா. வழி Sastri Road",
-        "usage": "SafeRoute: அனுப்பவும்: வழி <தெரு>, முகாம், வெள்ளம் <தெரு> அல்லது உதவி <தெரு>",
+        "route": "SafeRoute: {shelter}, நடந்து {eta} நிமி ({dist}). வழி: {steps}. மீட்பு: உதவி {street}",
+        "no_route": "SafeRoute: {street} இலிருந்து வழி இல்லை. உயரத்தில் இருங்கள். 112. மீட்பு: உதவி {street}",
+        "help": "SafeRoute: மீட்பு கோரிக்கை #{id} அனுப்பப்பட்டது. மேல் தளத்தில் இருங்கள். 112",
+        "flood": "SafeRoute: வெள்ளம் பதிவானது (#{id}). வழிகள் தவிர்க்கும்.",
+        "shelters": "SafeRoute முகாம்கள்: {list}",
+        "status": "SafeRoute: {closed} சாலைகள் மூடல். மழை: {rain}",
+        "unknown_street": "SafeRoute: '{query}' இல்லை. எ.கா. வழி Sastri Road",
+        "usage": "SafeRoute: வழி/சேர் <தெரு>, முகாம், SAFE, உதவி <தெரு>",
+        "need_phone": "SafeRoute: உங்கள் போனிலிருந்து அனுப்பவும்.",
+        "welcome": "SafeRoute: {street} எச்சரிக்கை இயக்கம். முகாம் {shelter}, {eta} நிமி. நிறுத்த STOP",
+        "stopped": "SafeRoute: எச்சரிக்கை நிறுத்தப்பட்டது.",
+        "not_joined": "SafeRoute: எச்சரிக்கை இல்லை. சேர் <தெரு>",
+        "safe": "SafeRoute: பாதுகாப்பு பதிவானது. நன்றி.",
+        "otp": "SafeRoute குறியீடு {code}. 10 நிமி செல்லும்.",
+        "alert_blocked": "SafeRoute எச்சரிக்கை: வழி மூடல். {shelter}, {eta} நிமி: {steps}",
+        "alert_shelter": "SafeRoute எச்சரிக்கை: {old} {state}. {shelter}, {eta} நிமி: {steps}",
+        "alert_none": "SafeRoute எச்சரிக்கை: {street} இலிருந்து வழி இல்லை. உயரத்தில் இருங்கள். 112",
+        "alert_back": "SafeRoute: வழி திறந்தது. {shelter}, {eta} நிமி: {steps}",
+        "state_full": "நிரம்பியது",
+        "state_closed": "மூடப்பட்டது",
+        "state_cut": "துண்டிப்பு",
         "full": "{name} நிரம்பியது",
-        "load": "{name} {pct}% நிரம்பியது",
-        "closed": "{name} மூடப்பட்டது",
+        "load": "{name} {pct}%",
+        "closed": "{name} மூடல்",
         "rain": {"dry": "இல்லை", "light": "லேசான", "moderate": "மிதமான", "heavy": "கனமழை", "extreme": "மிகக் கனமழை"},
         "rain_unknown": "தெரியவில்லை",
     },
     "hi": {
-        "route": "SafeRoute: सबसे नज़दीकी खुला शिविर {shelter}, पैदल {eta} मिनट ({dist})। रास्ता: {steps}। "
-        "बचाव चाहिए? भेजें: मदद {street}",
-        "no_route": "SafeRoute: {street} से अभी किसी शिविर तक नहीं पहुँचा जा सकता। ऊँची जगह पर रहें, 112 पर "
-        "कॉल करें। बचाव के लिए भेजें: मदद {street}",
-        "help": "SafeRoute: {street} के पास बचाव अनुरोध दर्ज हुआ (#{id})। बचाव दल इसे अभी देख रहे हैं। सबसे ऊपरी "
-        "मंज़िल पर रहें, फ़ोन चालू रखें। आपातकाल: 112",
-        "flood": "SafeRoute: धन्यवाद। {street} के पास बाढ़ की सूचना दर्ज हुई (#{id})। बचाव दल इसकी जाँच करेंगे; "
-        "रास्ते पहले से इससे बचते हैं।",
-        "shelters": "SafeRoute शिविर: {list}। रास्ते के लिए भेजें: रास्ता <आपकी गली>",
-        "status": "SafeRoute: {closed} सड़क हिस्से बंद हैं। बारिश: {rain}। रास्ते के लिए भेजें: रास्ता <आपकी गली>",
-        "unknown_street": "SafeRoute: '{query}' नहीं मिला। पास की किसी मुख्य सड़क का नाम भेजें, जैसे रास्ता Sastri Road",
-        "usage": "SafeRoute: भेजें: रास्ता <गली>, शिविर, बाढ़ <गली> या मदद <गली>",
-        "full": "{name} भरा हुआ",
-        "load": "{name} {pct}% भरा",
+        "route": "SafeRoute: {shelter}, पैदल {eta} मिनट ({dist})। रास्ता: {steps}। बचाव: मदद {street}",
+        "no_route": "SafeRoute: {street} से रास्ता नहीं। ऊँचाई पर रहें। 112। बचाव: मदद {street}",
+        "help": "SafeRoute: बचाव अनुरोध #{id} भेजा गया। ऊपर रहें, फ़ोन चालू रखें। 112",
+        "flood": "SafeRoute: बाढ़ दर्ज (#{id})। रास्ते इससे बचेंगे।",
+        "shelters": "SafeRoute शिविर: {list}",
+        "status": "SafeRoute: {closed} सड़कें बंद। बारिश: {rain}",
+        "unknown_street": "SafeRoute: '{query}' नहीं मिला। जैसे रास्ता Sastri Road",
+        "usage": "SafeRoute: रास्ता/जुड़ें <गली>, शिविर, SAFE, मदद <गली>",
+        "need_phone": "SafeRoute: अपने फ़ोन से भेजें।",
+        "welcome": "SafeRoute: {street} अलर्ट चालू। शिविर {shelter}, {eta} मिनट। बंद: STOP",
+        "stopped": "SafeRoute: अलर्ट बंद।",
+        "not_joined": "SafeRoute: अलर्ट नहीं थे। जुड़ें <गली>",
+        "safe": "SafeRoute: सुरक्षित दर्ज। धन्यवाद।",
+        "otp": "SafeRoute कोड {code}। 10 मिनट मान्य।",
+        "alert_blocked": "SafeRoute अलर्ट: रास्ता बंद। {shelter}, {eta} मिनट: {steps}",
+        "alert_shelter": "SafeRoute अलर्ट: {old} {state}। {shelter}, {eta} मिनट: {steps}",
+        "alert_none": "SafeRoute अलर्ट: {street} से रास्ता नहीं। ऊँचाई पर रहें। 112",
+        "alert_back": "SafeRoute: रास्ता खुला। {shelter}, {eta} मिनट: {steps}",
+        "state_full": "भरा",
+        "state_closed": "बंद",
+        "state_cut": "कटा",
+        "full": "{name} भरा",
+        "load": "{name} {pct}%",
         "closed": "{name} बंद",
         "rain": {"dry": "नहीं", "light": "हल्की", "moderate": "मध्यम", "heavy": "भारी", "extreme": "बहुत भारी"},
         "rain_unknown": "पता नहीं",
     },
 }
+
+# The GSM 03.38 basic alphabet: text using only these characters fits 160 per SMS.
+GSM7 = set(
+    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§"
+    "¿abcdefghijklmnopqrstuvwxyzäöñüà"
+)
+
+
+def segments(text: str) -> int:
+    """How many SMS a text needs: 160/153 characters each in GSM-7, 70/67 in Unicode."""
+    if set(text) <= GSM7:
+        return 1 if len(text) <= 160 else math.ceil(len(text) / 153)
+    return 1 if len(text) <= 70 else math.ceil(len(text) / 67)
+
+
+def say(key: str, lang: str, **values) -> str:
+    return TEXT.get(lang, TEXT["en"])[key].format(**values)
+
+
+def minutes(seconds: float) -> int:
+    return max(1, round(seconds / 60))
+
+
+def distance(metres: float) -> str:
+    return f"{round(metres / 10) * 10} m" if metres < 1000 else f"{metres / 1000:.1f} km"
+
+
+def steps_text(route: dict, lang: str) -> str:
+    names = [s["name"] for s in route["steps"] if s["name"] != "Unnamed road"]
+    return " > ".join(list(dict.fromkeys(names))[: STEPS_PER_LANG.get(lang, 3)]) or "-"
 
 
 @dataclass
@@ -102,6 +167,10 @@ class SmsServices:
     report: Callable[[str, float, float, str, str], int]  # kind, lat, lon, note, street -> report id
     shelters: Callable[[], list[dict]]  # [{name, status, load_pct}]
     status: Callable[[], dict]  # {closed, rain_level}
+    phone: str | None = None  # the sender, when known
+    join: Callable[[str, str, str], str] | None = None  # phone, street, lang -> welcome text
+    stop: Callable[[str], bool] | None = None  # phone -> was subscribed
+    safe: Callable[[str], None] | None = None  # phone
 
 
 def script_language(word: str) -> str:
@@ -131,10 +200,6 @@ def find_street(network: RoadNetwork, query: str) -> str | None:
     return names[close[0]] if close else None
 
 
-def _distance(metres: float) -> str:
-    return f"{round(metres / 10) * 10} m" if metres < 1000 else f"{metres / 1000:.1f} km"
-
-
 def parse(text: str) -> tuple[str | None, str, str]:
     """Returns (command, language, rest of the message)."""
     words = text.strip().split()
@@ -158,12 +223,8 @@ def handle(text: str, services: SmsServices) -> tuple[str, str]:
     if command == "shelters":
         items = []
         for shelter in services.shelters():
-            if shelter["status"] == "closed":
-                items.append(t["closed"].format(name=shelter["name"]))
-            elif shelter["status"] == "full":
-                items.append(t["full"].format(name=shelter["name"]))
-            else:
-                items.append(t["load"].format(name=shelter["name"], pct=shelter["load_pct"]))
+            key = {"closed": "closed", "full": "full"}.get(shelter["status"], "load")
+            items.append(t[key].format(name=shelter["name"], pct=shelter["load_pct"]))
         return t["shelters"].format(list="; ".join(items)), lang
 
     if command == "status":
@@ -171,23 +232,33 @@ def handle(text: str, services: SmsServices) -> tuple[str, str]:
         rain = t["rain"].get(info.get("rain_level") or "", t["rain_unknown"])
         return t["status"].format(closed=info["closed"], rain=rain), lang
 
-    if command in ("route", "flood", "help"):
+    if command in ("stop", "safe"):
+        if not services.phone:
+            return t["need_phone"], lang
+        if command == "stop":
+            return t["stopped" if services.stop(services.phone) else "not_joined"], lang
+        services.safe(services.phone)
+        return t["safe"], lang
+
+    if command in ("route", "flood", "help", "join"):
         street = find_street(services.network, rest)
         if street is None:
             return (t["unknown_street"] if rest else t["usage"]).format(query=rest[:40]), lang
+        if command == "join":
+            if not services.phone:
+                return t["need_phone"], lang
+            return services.join(services.phone, street, lang), lang
         lat, lon = services.network.street_point(street)
         if command == "route":
-            result = services.route(lat, lon)
-            route = result.get("route")
+            route = services.route(lat, lon).get("route")
             if not route:
                 return t["no_route"].format(street=street), lang
-            names = [s["name"] for s in route["steps"] if s["name"] != "Unnamed road"]
-            steps = " > ".join(dict.fromkeys(names[:3])) or street
+            shelter = services.network.shelters[route["shelter"]["id"]]
             reply = t["route"].format(
-                shelter=route["shelter"]["name"],
-                eta=max(1, round(route["eta_s"] / 60)),
-                dist=_distance(route["distance_m"]),
-                steps=steps,
+                shelter=shelter.sms_name,
+                eta=minutes(route["eta_s"]),
+                dist=distance(route["distance_m"]),
+                steps=steps_text(route, lang),
                 street=street,
             )
             return reply, lang

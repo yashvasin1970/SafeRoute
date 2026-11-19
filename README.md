@@ -5,9 +5,10 @@ DM03 *Blocked Evacuation Route Finder* (Disaster Management), team AstroSync.
 
 A resident taps where they are and gets the best route to an open shelter that they can still reach,
 using only roads that are open right now. The route avoids rising water and reported flooding, and
-spreads people across shelters before any one fills. When a responder blocks a road, a flood sensor
-detects water, or a resident reports a problem, every open map updates within seconds. It works in
-English, Tamil and Hindi, by SMS for basic phones, and offline.
+spreads people across shelters by live headcount before any one fills. When a responder blocks a road,
+a flood sensor detects water, or a resident reports a problem, every open map updates within seconds,
+and SMS subscribers whose route is now blocked get a text. It works in English, Tamil and Hindi, by
+SMS for basic phones, and offline.
 
 The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (927 junctions,
 1,130 road segments), an area that floods often.
@@ -16,7 +17,7 @@ The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (9
 |---|---|
 | Stack | Python 3.11+, Flask, NetworkX (Dijkstra), SQLite, Leaflet.js, OpenStreetMap / OSMnx, Open-Meteo |
 | Runtime dependencies | 3 (Flask, NetworkX, python-dotenv), plus gunicorn on Linux hosts |
-| Tests | 122 automated tests (`pytest`), lint and format checks (`ruff`) |
+| Tests | 153 automated tests (`pytest`), lint and format checks (`ruff`) |
 | Speed | A route takes ~30 ms; a planner what-if over every junction ~40 ms on a laptop |
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/yashvasin1970/SafeRoute)
@@ -34,7 +35,12 @@ The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (9
   it cost ("2 min longer than the fastest, to avoid rising water at Taramani Link Road").
 - **Load balancing:** if the nearest shelter is filling up, you are sent where there is space, with
   the reason. *I'm going here* tells the system you are on your way, so the next people spread out.
-- **Report** flooding, a blocked road or a rescue need at a spot on the map.
+- **Report** flooding, a blocked road or a rescue need at a spot on the map. **I'm trapped** drops a
+  pin for responders (and says plainly it does not replace calling 112).
+- **I've reached the shelter** checks you in, raising its live headcount; **I'm safe** tells responders
+  you are out of danger; **Share route** gives family a live link to the same route.
+- **Get SMS alerts** for your street: a one-time code to your number confirms it, then SafeRoute texts
+  you if your route is blocked or your shelter is lost.
 - The route **updates by itself** when conditions change, with a banner explaining why.
 - If no open shelter can be reached, it says so plainly and gives safety advice and the 112 number.
 
@@ -43,12 +49,19 @@ The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (9
 - Block and reopen roads; mark shelters open, full or closed and set **how many people are inside**.
 - See resident reports (rescue requests and notes are visible to responders only), and **verify**
   them (which closes the road) or **dismiss** them.
-- Play the **flood story** (see below), or reset the demo.
+- An **at-a-glance** panel: SMS subscribers (and how many are heading to each shelter), people marked
+  safe, open reports and rescue requests, people on the way, and SMS/alerts sent. Download the whole
+  **activity log as CSV**.
+- **Load flood scenario** (one click: a Michaung-style heavy flood), play the **flood story**, or reset.
 
 ### Planners: *Planners*
 - Build a what-if scenario by tapping roads and shelters. **Nothing is published.**
 - Compare live and scenario: junctions that can reach a shelter, cut off, average time, the time
   within which 9 in 10 people reach safety, and the slowest junction. Colour every road by time to safety.
+- **Test the flood scenario** loads the Michaung-style closures into the scenario in one click. On the
+  real Velachery roads that is 40 segments (≈4.6 km): 22 junctions cut off (2.4%), 133 at least a
+  minute slower on foot, one of five shelters isolated, and the 90th-percentile walk to safety up from
+  17.6 to 19.2 minutes.
 
 ### Live feeds
 - **IoT flood sensors:** at 30 cm a sensor closes every road within 80 m; below 15 cm it reopens
@@ -68,10 +81,12 @@ The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (9
 
 Risks add up, capped at × 5. ETAs are always real travel times; the risk only steers the choice.
 
-### Shelter load balancing
-A shelter's score is its travel time plus a penalty that grows once it is over 70% full, counting
-people already on their way (up to 10 extra minutes at 100%). A full shelter is never suggested.
-Capacities are in `data/velachery.shelters.json` (sample values).
+### Shelter capacity and live headcount
+Each shelter has a capacity and a live headcount. Responders set it directly, and every **I've reached
+the shelter** check-in raises it. A shelter's score is its travel time plus a penalty that grows once
+it is over 70% full, counting people who tapped **I'm going here** (up to 10 extra minutes at 100%).
+At capacity it marks itself full: new arrivals are routed elsewhere and SMS subscribers heading there
+are alerted. Capacities and short names are in `data/velachery.shelters.json` (sample values).
 
 ### SMS for phones without data
 Text commands, answered by the same routing engine, with replies in the language you used:
@@ -79,14 +94,25 @@ Text commands, answered by the same routing engine, with replies in the language
 | English | Tamil | Hindi | Reply |
 |---|---|---|---|
 | `ROUTE <street>` | `வழி <street>` | `रास्ता <street>` | Nearest open shelter, ETA, the first streets to take |
+| `JOIN <street>` | `சேர் <street>` | `जुड़ें <street>` | Switch on alerts for your street (texting from the phone proves the number) |
 | `SHELTERS` | `முகாம்` | `शिविर` | Each shelter and how full it is |
 | `FLOOD <street>` | `வெள்ளம் <street>` | `बाढ़ <street>` | Logs a flooding report |
 | `HELP <street>` | `உதவி <street>` | `मदद <street>` | Logs a rescue request for responders |
+| `SAFE` / `STOP` | `பாதுகாப்பு` / `நிறுத்து` | `सुरक्षित` / `रोकें` | Mark yourself safe / end alerts |
 | `STATUS` | `நிலை` | `स्थिति` | Roads blocked and the rain forecast |
 
-Street names are matched loosely ("sastri rd" finds Sastri Road). Try it in the app under *No mobile
-data? Use SMS*. A real SMS gateway posts to `/api/sms/inbound` with the `X-Gateway-Key` header;
-Twilio-style form posts get a TwiML reply.
+Street names are matched loosely ("sastri rd" finds Sastri Road). Tamil and Hindi travel as Unicode
+SMS (70 characters each), so replies and alerts are kept to about two messages and shelters use short
+names. Try it in the app under *No mobile data? Use SMS* (it talks to a built-in demo phone). A real
+SMS gateway (Twilio etc.) posts incoming messages to `/api/sms/inbound` with the `X-Gateway-Key`
+header, getting a TwiML reply; set `SAFEROUTE_SMS_OUTBOUND_URL` for SafeRoute to send codes and alerts
+back out through it.
+
+### SMS alerts when your route is blocked
+Sign up on the web (a one-time code to your number confirms it is yours) or by texting `JOIN`. After
+every change to the map, SafeRoute re-checks each subscriber's route and texts them only when there is
+a real problem — a road on their route closed, their shelter filled, closed or was cut off, or no
+shelter can be reached — at most one text every five minutes, and never once they reply `SAFE`.
 
 ### English, Tamil and Hindi
 The whole interface switches language from the top bar, and remembers the choice. The Tamil and Hindi
@@ -143,6 +169,7 @@ passcode. To set your own, copy `.env.example` to `.env`:
 | `SAFEROUTE_SMS_KEY` | Key an SMS gateway sends to `/api/sms/inbound` |
 | `SAFEROUTE_SECRET_KEY` | Signs session cookies |
 | `SAFEROUTE_TRUST_PROXY`, `SAFEROUTE_SECURE_COOKIES` | Set to `1` behind a hosting proxy with HTTPS |
+| `SAFEROUTE_SMS_OUTBOUND_URL` | An SMS gateway's send endpoint; set it to text real numbers (otherwise only the in-app demo phone) |
 | `SAFEROUTE_NO_WEATHER` | Set to `1` to turn off the Open-Meteo feed |
 | `SAFEROUTE_STORY_STEP_SECONDS` | Seconds between flood-story steps (default 9) |
 
@@ -153,11 +180,15 @@ passcode. To set your own, copy `.env.example` to `.env`:
 3. **Flood story.** In a second window, *Responders → sign in → Play flood story*. Watch the first
    window: rain warning, risky roads in amber, a resident report, Taramani Link Road closing, the route
    moving, shelters filling and people being balanced to other shelters, then roads reopening.
-4. **SMS.** Under *No mobile data? Use SMS*, send `ROUTE Sastri Road` or `வழி Sastri Road`.
-5. **Responder.** Verify the open rescue request; block a road by hand and watch the reroute banner.
-6. **Planner.** Tap two or three roads near a shelter and read the impact table.
+4. **One-click flood.** For a faster demo, *Responders → Load flood scenario* instead of the story.
+5. **SMS.** Under *No mobile data? Use SMS*, send `ROUTE Sastri Road`, or `JOIN Sastri Road` and watch
+   an alert text arrive when you block that road.
+6. **Responder.** Verify the open rescue request; check the at-a-glance numbers; block a road by hand.
+7. **Planner.** *Test the flood scenario*, or tap roads near a shelter, and read the impact table.
 
-Real sensors can be imitated with `python scripts/simulate_sensors.py`.
+Real sensors can be imitated with `python scripts/simulate_sensors.py`. For a laptop-fails backup,
+record the full flow as a short video before presenting (Wi-Fi and free hosting are unreliable at
+hackathons), and warm the hosted link a minute before you start, since the free plan sleeps.
 
 ## How it works
 
@@ -183,16 +214,22 @@ Real sensors can be imitated with `python scripts/simulate_sensors.py`.
 | POST | `/api/route` | anyone | `{lat, lon, mode, prefer}` → route, ETA, steps, risks avoided, load balancing, every shelter |
 | POST | `/api/impact` | anyone | `{mode, closures, shelters_closed}` → live vs. scenario coverage (publishes nothing) |
 | POST | `/api/arrivals` | anyone | `{shelter, people}`: "I'm going here" (3 per person, expires after 45 min) |
+| POST | `/api/checkin` | anyone | `{shelter, people}`: "I've reached the shelter" — raises the headcount, counts you safe |
+| POST | `/api/safe` | anyone | `{shelter?}`: mark yourself safe (counted once) |
 | POST | `/api/reports` | anyone | `{lat, lon, kind, note}` with kind `flooding`, `blocked` or `rescue` (6 per 10 min) |
-| POST | `/api/sms/simulate` | anyone | `{text}` → the SMS reply (rate-limited) |
+| POST | `/api/subscriptions` / `/verify` | anyone | Web SMS sign-up: send a code to a number, then confirm it |
+| POST | `/api/sms/simulate` | anyone | `{text, phone?}` → the SMS reply (rate-limited) |
+| GET | `/api/sms/inbox?phone=` | anyone | Messages SafeRoute sent the in-app demo phone (demo numbers only) |
 | POST | `/api/responder/login` / `logout` | responders | `{name, passcode}` |
 | POST / DELETE | `/api/closures`, `/api/closures/<road>` | responders | Block / reopen a road |
 | POST | `/api/shelters/<id>` | responders | `{status}` and/or `{occupancy}` |
 | POST | `/api/reports/<id>/verify` or `/dismiss` | responders | Verify (closes the road) or dismiss a report |
+| GET | `/api/stats`, `/api/events.csv` | responders | At-a-glance numbers; the full activity log as CSV |
+| POST | `/api/scenario/flood` | responders | Load the one-click heavy-flood scenario |
 | POST | `/api/story/start` or `/stop` | responders | Play or stop the flood story |
 | POST | `/api/reset` | responders | Clear closures, reports, readings and shelter counts |
 | POST | `/api/sensors/<id>/readings` | devices | `{level_cm}` with `X-Device-Key` |
-| POST | `/api/sms/inbound` | SMS gateway | JSON `{text}` or Twilio form `Body`, with `X-Gateway-Key` |
+| POST | `/api/sms/inbound` | SMS gateway | JSON `{text, from}` or Twilio form `Body`/`From`, with `X-Gateway-Key` |
 
 ## Security
 
@@ -206,19 +243,30 @@ Real sensors can be imitated with `python scripts/simulate_sensors.py`.
 - **Strict Content Security Policy** (no inline or third-party scripts), `X-Frame-Options: DENY`,
   `nosniff`, `no-referrer`, HSTS on HTTPS. Leaflet is bundled and checked against its official hashes.
 - **All input is validated**; the page inserts server text with `textContent`, never as HTML.
+- **SMS numbers are verified** by a one-time code (salted hash, 10-minute expiry, 5 tries, 3 codes an
+  hour) so nobody can subscribe someone else; numbers are only ever shown masked.
+
+## Accessibility and reach
+
+Evacuation tools are used by stressed people, older people, on cheap phones, in the rain, with no data.
+SafeRoute has a **large-text, high-contrast** toggle, a prominent **I'm trapped / need help** button
+(which drops a pin for responders and says plainly it does not replace 112), **Share route** so family
+can follow the same live route, works offline, and labels its controls with live regions for screen
+readers. It runs fully in English, Tamil and Hindi, and by SMS for phones with no data at all.
 
 ## Testing
 
 ```bash
 pip install -r requirements-dev.txt
-pytest          # 122 tests
+pytest          # 153 tests
 ruff check . && ruff format --check .
 ```
 
 Most tests use a six-junction town where every answer can be checked by hand (`tests/conftest.py`):
-routing and closures, risk-weighted routing and its explanations, load balancing, every sensor rule,
-reports, arrivals, the weather feed (with a fake service), SMS parsing and replies in three languages,
-every API endpoint and its security checks, and the whole flood story run against the real Velachery map.
+routing and closures, risk-weighted routing and its explanations, shelter capacity, load balancing and
+check-in, every sensor rule, reports, arrivals, the weather feed (with a fake service), SMS parsing and
+replies in three languages, OTP sign-up and route-blocked alerts, "I'm safe" and responder stats, and
+the whole flood story and one-click flood scenario run against the real Velachery map.
 
 ## Project structure
 
@@ -230,9 +278,11 @@ saferoute/
   sensors.py      Flood sensor thresholds and decisions
   reports.py      Resident reports: snap to a road, verify, dismiss
   feeds.py        Live weather from Open-Meteo, with a drill override
-  sms.py          SMS commands in English, Tamil and Hindi
-  story.py        The scripted flood evening
-  store.py        SQLite: closures, shelters, occupancy, arrivals, reports, feeds, activity, version
+  sms.py          SMS commands and short multilingual texts
+  subscriptions.py  SMS alert sign-up with one-time codes; JOIN / STOP / SAFE
+  alerts.py       Sending SMS; texting subscribers when their route is blocked or shelter is lost
+  story.py        The scripted flood evening and the one-click flood scenario
+  store.py        SQLite: closures, shelters, occupancy, arrivals, reports, subscribers, outbox, ...
   api.py          HTTP API
   security.py     Secrets, sign-in, CSRF, rate limiting, security headers
   compression.py  Gzip for slow connections

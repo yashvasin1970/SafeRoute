@@ -484,7 +484,158 @@
         }
       },
     });
-    return el("div", { class: "arrive" }, el("div", { class: "arrive-row" }, el("label", { class: "arrive-people" }, t("arrive.people"), people), button), message);
+    const checkIn = el("button", {
+      type: "button",
+      class: "btn btn-safe btn-auto",
+      text: t("checkin.button"),
+      onclick: async () => {
+        checkIn.disabled = true;
+        try {
+          const data = await api("/api/checkin", { body: { shelter: route.shelter.id, people: Number(people.value) } });
+          message.textContent = t(data.full ? "checkin.full" : "checkin.done", { shelter: route.shelter.name, inside: data.inside, cap: data.capacity });
+          syncNow();
+        } catch (error) {
+          message.textContent = errorText(error);
+          checkIn.disabled = false;
+        }
+      },
+    });
+    const share = el("button", { type: "button", class: "btn btn-quiet btn-auto", text: t("share.button"), onclick: shareRoute });
+    return el("div", { class: "arrive" }, el("div", { class: "arrive-row" }, el("label", { class: "arrive-people" }, t("arrive.people"), people), button, checkIn, share), message);
+  }
+
+  // ---- sharing a route ---------------------------------------------------------------------
+
+  function shareUrl() {
+    const { lat, lon } = state.route.start;
+    const url = new URL(window.location.origin + window.location.pathname);
+    url.searchParams.set("from", `${lat.toFixed(5)},${lon.toFixed(5)}`);
+    url.searchParams.set("mode", state.route.mode);
+    url.searchParams.set("prefer", state.route.prefer);
+    return url.toString();
+  }
+
+  async function shareRoute() {
+    if (!state.route.start) return;
+    const link = shareUrl();
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "SafeRoute", url: link });
+        return;
+      }
+      await navigator.clipboard.writeText(link);
+      toast(t("share.copied"));
+    } catch {
+      window.prompt("SafeRoute", link);
+    }
+  }
+
+  function openSharedRoute() {
+    const params = new URLSearchParams(window.location.search);
+    const from = (params.get("from") || "").split(",").map(Number);
+    if (from.length !== 2 || from.some((n) => !Number.isFinite(n))) return;
+    if (["foot", "vehicle"].includes(params.get("mode"))) state.route.mode = params.get("mode");
+    if (["safest", "fastest"].includes(params.get("prefer"))) state.route.prefer = params.get("prefer");
+    for (const [group, value] of [["mode", state.route.mode], ["prefer", state.route.prefer]]) {
+      for (const button of $$(`[data-group="${group}"] [role=radio]`)) button.setAttribute("aria-checked", String(button.dataset.value === value));
+    }
+    setStart(L.latLng(from[0], from[1]));
+    showBanner(t("share.viewing"));
+  }
+
+  // ---- demo phone, SMS alerts sign-up, I'm safe, I'm trapped ---------------------------------
+
+  function demoPhone() {
+    let phone = storeGet("saferoute.phone");
+    if (!/^\+910000\d{6}$/.test(phone || "")) {
+      phone = `+910000${String(Math.floor(Math.random() * 1e6)).padStart(6, "0")}`;
+      storeSet("saferoute.phone", phone);
+    }
+    return phone;
+  }
+  const prettyPhone = (phone) => `${phone.slice(0, 3)} ${phone.slice(3, 7)} ${phone.slice(7)}`;
+
+  let lastInboxId = 0;
+  async function pollInbox() {
+    try {
+      const data = await api(`/api/sms/inbox?phone=${encodeURIComponent(demoPhone())}&after=${lastInboxId}`);
+      if (!data?.messages?.length) return;
+      const thread = $("#sms-thread");
+      for (const message of data.messages) {
+        lastInboxId = Math.max(lastInboxId, message.id);
+        thread.append(el("li", { class: `bubble${message.kind.startsWith("alert") ? " is-alert" : ""}`, text: message.text }));
+      }
+      thread.scrollTop = thread.scrollHeight;
+      if (!$("#sms-drawer").open) {
+        const badge = $("#sms-badge");
+        badge.textContent = t("phone.new");
+        badge.hidden = false;
+      }
+    } catch {
+      /* offline: try again later */
+    }
+  }
+
+  function alertMessage(text) {
+    const message = $("#alerts-msg");
+    message.textContent = text;
+    message.hidden = false;
+  }
+
+  async function startAlerts(event) {
+    event.preventDefault();
+    const phone = $("#alerts-phone").value.trim();
+    try {
+      const data = await api("/api/subscriptions", { body: { phone, street: $("#alerts-street").value, lang: state.lang } });
+      $("#alerts-verify").hidden = false;
+      $("#alerts-code").focus();
+      alertMessage(t("alerts.sent", { to: data.to }));
+      setTimeout(pollInbox, 800);
+    } catch (error) {
+      alertMessage(errorText(error));
+    }
+  }
+
+  async function confirmAlerts(event) {
+    event.preventDefault();
+    try {
+      const data = await api("/api/subscriptions/verify", { body: { phone: $("#alerts-phone").value.trim(), code: $("#alerts-code").value.trim() } });
+      $("#alerts-verify").hidden = true;
+      alertMessage(t("alerts.done", { street: data.street }));
+      setTimeout(pollInbox, 800);
+    } catch (error) {
+      alertMessage(errorText(error));
+    }
+  }
+
+  async function markSafe() {
+    const message = $("#safe-msg");
+    message.hidden = false;
+    try {
+      const data = await api("/api/safe", { body: {} });
+      message.textContent = t(data.counted ? "safe.done" : "safe.again");
+    } catch (error) {
+      message.textContent = errorText(error);
+    }
+  }
+
+  function trapped() {
+    if (!state.route.start) {
+      toast(t("trapped.need_spot"));
+      return;
+    }
+    $("#report-drawer").open = true;
+    sendReport("rescue");
+    $("#report-drawer").scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  // ---- accessibility -----------------------------------------------------------------------
+
+  function setA11y(on) {
+    document.body.classList.toggle("a11y", on);
+    $("#a11y").setAttribute("aria-pressed", String(on));
+    storeSet("saferoute.a11y", on ? "1" : "0");
+    map?.invalidateSize();
   }
 
   function renderRouteResult() {
@@ -751,9 +902,10 @@
     thread.append(el("li", { class: "bubble is-me", text }));
     thread.scrollTop = thread.scrollHeight;
     try {
-      const data = await api("/api/sms/simulate", { body: { text } });
+      const data = await api("/api/sms/simulate", { body: { text, phone: demoPhone() } });
       thread.append(el("li", { class: "bubble", text: data.reply }));
       syncNow();
+      setTimeout(pollInbox, 1500);
     } catch (error) {
       thread.append(el("li", { class: "bubble is-error", text: errorText(error) }));
     }
@@ -798,7 +950,30 @@
     $("#responder-name").textContent = signedIn ? t("resp.signed", { name: state.session.responder }) : "";
     renderClosureList();
     renderReportList();
+    if (signedIn) loadStatsSoon();
   }
+
+  async function loadStats() {
+    if (!state.session.responder) return;
+    let numbers;
+    try {
+      numbers = await api("/api/stats");
+    } catch {
+      return;
+    }
+    const tile = (big, label, sub) => el("div", { class: "tile" }, el("b", { text: String(big) }), el("span", { text: label }), sub ? el("span", { class: "small muted", text: sub }) : null);
+    $("#stats-grid").replaceChildren(
+      tile(numbers.subscribers.total, t("stats.subscribers"), numbers.subscribers.pending ? t("stats.pending", { n: numbers.subscribers.pending }) : null),
+      tile(numbers.safe.total, t("stats.safe"), t("stats.safe_hour", { n: numbers.safe.last_hour })),
+      tile(numbers.reports.open, t("stats.reports"), t("stats.rescue", { n: numbers.reports.rescue })),
+      tile(numbers.en_route, t("stats.en_route")),
+      tile(numbers.sms.total, t("stats.sms"), t("stats.alerts", { n: numbers.sms.alerts })),
+    );
+    const rows = Object.entries(numbers.subscribers.by_shelter).map(([id, n]) => el("li", {}, el("span", { class: "grow", text: state.shelters.get(id)?.name || id }), el("b", { text: String(n) })));
+    if (numbers.subscribers.no_route) rows.push(el("li", {}, el("span", { class: "grow", text: t("stats.no_route") }), el("b", { text: String(numbers.subscribers.no_route) })));
+    $("#stats-shelters").replaceChildren(el("p", { class: "popup-label", text: t("stats.by_shelter") }), el("ul", { class: "mini-list" }, rows));
+  }
+  const loadStatsSoon = debounce(loadStats, 300);
 
   function renderReportList() {
     const list = $("#report-list");
@@ -1007,6 +1182,16 @@
         return t("ev.dismissed", vars);
       case "weather":
         return t("ev.weather", vars);
+      case "sms joined":
+        return t("ev.joined", vars);
+      case "sms stopped":
+        return t("ev.stopped", vars);
+      case "safe":
+        return t("ev.safe", vars);
+      case "check-in":
+        return t("ev.checkin", vars);
+      case "scenario":
+        return t("ev.scenario", vars);
       default:
         if (event.action.startsWith("shelter ")) return t("ev.shelter", { ...vars, status: t(`status.${event.action.slice(8)}`) });
         return `${event.actor}: ${event.action} ${event.detail}`;
@@ -1223,6 +1408,34 @@
       renderStory();
     });
 
+    $("#a11y").addEventListener("click", () => setA11y(!document.body.classList.contains("a11y")));
+    $("#trapped").addEventListener("click", trapped);
+    $("#im-safe").addEventListener("click", markSafe);
+    $("#alerts-form").addEventListener("submit", startAlerts);
+    $("#alerts-verify").addEventListener("submit", confirmAlerts);
+    $("#alerts-demo").addEventListener("click", () => {
+      $("#alerts-phone").value = prettyPhone(demoPhone());
+      $("#sms-drawer").open = true;
+    });
+    $("#sms-drawer").addEventListener("toggle", () => {
+      if ($("#sms-drawer").open) $("#sms-badge").hidden = true;
+    });
+    $("#scenario-load").addEventListener("click", () => {
+      state.storyHiddenAt = null;
+      responderAction(api("/api/scenario/flood", { body: {}, csrf: true }), t("scenario.done"));
+    });
+    $("#plan-flood").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/scenario/flood/roads");
+        for (const id of data.roads) if (!state.live.closures.has(id)) state.plan.roads.add(id);
+        restyleRoads();
+        renderScenario();
+        requestImpact();
+      } catch (error) {
+        toast(errorText(error));
+      }
+    });
+
     $("#coverage").addEventListener("change", (event) => {
       state.plan.coverage = event.target.checked;
       $("#scale").hidden = !event.target.checked;
@@ -1241,7 +1454,11 @@
   function fillStreets() {
     const names = [...new Set([...state.roads.values()].map((r) => r.name))].filter((n) => n !== "Unnamed road").sort();
     const select = $("#street");
-    for (const name of names) select.append(el("option", { value: name, text: name }));
+    const alertsStreet = $("#alerts-street");
+    for (const name of names) {
+      select.append(el("option", { value: name, text: name }));
+      alertsStreet.append(el("option", { value: name, text: name }));
+    }
   }
 
   // ---- start -------------------------------------------------------------------------------
@@ -1261,6 +1478,7 @@
     };
     state.lang = pickLanguage();
     applyStaticText();
+    setA11y(storeGet("saferoute.a11y") === "1");
     wireTabs();
     wireControls();
     try {
@@ -1291,6 +1509,12 @@
     initMap();
     fillStreets();
     renderEverything();
+    $("#phone-number").textContent = t("phone.label", { number: prettyPhone(demoPhone()) });
+    openSharedRoute();
+    pollInbox();
+    setInterval(() => {
+      if (document.visibilityState === "visible") pollInbox();
+    }, 5000);
     api("/api/session")
       .then((session) => {
         state.session = session;

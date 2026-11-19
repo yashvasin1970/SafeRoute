@@ -104,14 +104,14 @@ def test_sms_simulator_in_three_languages(client):
     tamil = client.post("/api/sms/simulate", json={"text": "வழி West Lane"}).json
     assert tamil["lang"] == "ta" and "Shelter B" in tamil["reply"]
     help_reply = client.post("/api/sms/simulate", json={"text": "HELP south street"}).json["reply"]
-    assert "Rescue request logged near South Street" in help_reply
+    assert "near South Street sent to responders" in help_reply
     assert client.post("/api/sms/simulate", json={"text": ""}).status_code == 400
 
 
 def test_sms_gateway_needs_its_key_and_speaks_twiml(client):
     assert client.post("/api/sms/inbound", json={"text": "STATUS"}).status_code == 401
     as_json = client.post("/api/sms/inbound", json={"text": "STATUS"}, headers={"X-Gateway-Key": SMS_KEY})
-    assert as_json.json["reply"].startswith("SafeRoute: 0 road segments blocked")
+    assert as_json.json["reply"].startswith("SafeRoute: 0 roads blocked")
     as_form = client.post(
         "/api/sms/inbound", data={"Body": "SHELTERS", "From": "+910000"}, headers={"X-Gateway-Key": SMS_KEY}
     )

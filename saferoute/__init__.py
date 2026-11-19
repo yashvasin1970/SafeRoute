@@ -13,7 +13,9 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from .alerts import Alerter, AlertWorker, Messenger
 from .api import bp as api_bp
+from .api import route_body
 from .compression import add_compression
 from .feeds import WeatherFeed
 from .network import RoadNetwork
@@ -60,6 +62,8 @@ def create_app(overrides: dict | None = None) -> Flask:
         SHELTERS_FILE=DEFAULT_SHELTERS,
         WEATHER_ENABLED=not overrides.get("TESTING") and not env_flag("SAFEROUTE_NO_WEATHER"),
         STORY_STEP_SECONDS=float(os.environ.get("SAFEROUTE_STORY_STEP_SECONDS", "9")),
+        SMS_OUTBOUND_URL=os.environ.get("SAFEROUTE_SMS_OUTBOUND_URL") or None,
+        ALERTS_IN_BACKGROUND=not overrides.get("TESTING"),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_NAME="saferoute_session",
@@ -88,6 +92,18 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.extensions["saferoute.reports_limiter"] = AttemptLimiter(limit=6, window_s=600)
     app.extensions["saferoute.arrivals_limiter"] = AttemptLimiter(limit=10, window_s=600)
     app.extensions["saferoute.sms_limiter"] = AttemptLimiter(limit=20, window_s=600)
+    app.extensions["saferoute.signup_limiter"] = AttemptLimiter(limit=5, window_s=600)
+    app.extensions["saferoute.safe_limiter"] = AttemptLimiter(limit=5, window_s=600)
+
+    # SMS out, and alerts when subscribers' routes are blocked or their shelter is lost.
+    messenger = Messenger(db, app.config["SMS_OUTBOUND_URL"], app.config["SMS_KEY"])
+    alerter = Alerter(db, net, lambda lat, lon: route_body(lat, lon, "foot", "safest")[0], messenger)
+    app.extensions["saferoute.messenger"] = messenger
+    app.extensions["saferoute.alerter"] = alerter
+    worker = AlertWorker(app, alerter) if app.config["ALERTS_IN_BACKGROUND"] else None
+    app.extensions["saferoute.alerts_worker"] = worker
+    if worker is not None:
+        app.extensions["saferoute.story"].on_change = worker.kick
 
     app.register_blueprint(api_bp)
     # Registered first so it runs last: compress the final body, after headers are set.

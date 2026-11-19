@@ -32,6 +32,7 @@
         <span class="live-dot" aria-hidden="true"></span>
         <span id="live-text" data-i18n="live.connecting">Connecting…</span>
       </div>
+      <button type="button" class="a11y-toggle" id="a11y" aria-pressed="false" data-i18n-aria="a11y.toggle" title="">Aa</button>
       <label class="lang">
         <span class="visually-hidden">Language</span>
         <select id="lang" aria-label="Language">
@@ -74,6 +75,10 @@
 
       <!-- Residents -->
       <section class="tab" id="tab-route" role="tabpanel" aria-labelledby="tab-btn-route">
+        <div class="trapped">
+          <button type="button" class="btn btn-trapped" id="trapped" data-i18n="trapped.button">I'm trapped / need help</button>
+          <p class="small muted" data-i18n="trapped.note"></p>
+        </div>
         <p class="lead" data-i18n="route.lead"></p>
 
         <div class="field-row">
@@ -98,6 +103,29 @@
         <div class="banner" id="route-banner" role="alert" hidden></div>
         <div id="route-result" aria-live="polite"></div>
 
+        <div class="card safe-card">
+          <strong data-i18n="safe.title">Already safe?</strong>
+          <p class="muted small" data-i18n="safe.lead"></p>
+          <button type="button" class="btn btn-safe" id="im-safe" data-i18n="safe.button">I'm safe</button>
+          <p class="report-msg" id="safe-msg" role="status" hidden></p>
+        </div>
+
+        <details class="drawer" id="alerts-drawer">
+          <summary data-i18n="alerts.title">Get SMS alerts for your street</summary>
+          <p class="muted" data-i18n="alerts.lead"></p>
+          <form id="alerts-form" autocomplete="off">
+            <label class="field"><span data-i18n="alerts.phone">Mobile number</span><input id="alerts-phone" inputmode="tel" maxlength="20" placeholder="+91 ..."></label>
+            <button type="button" class="link-button" id="alerts-demo" data-i18n="alerts.use_demo">Use the demo phone</button>
+            <label class="field"><span data-i18n="alerts.street">Your street</span><select id="alerts-street"></select></label>
+            <button class="btn btn-primary" type="submit" data-i18n="alerts.send">Send code</button>
+          </form>
+          <form id="alerts-verify" autocomplete="off" hidden>
+            <label class="field"><span data-i18n="alerts.code">6-digit code</span><input id="alerts-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>
+            <button class="btn btn-primary" type="submit" data-i18n="alerts.confirm">Confirm</button>
+          </form>
+          <p class="report-msg" id="alerts-msg" role="status" hidden></p>
+        </details>
+
         <details class="drawer" id="report-drawer">
           <summary data-i18n="report.title">Report something here</summary>
           <p class="muted" data-i18n="report.hint"></p>
@@ -114,9 +142,10 @@
         </details>
 
         <details class="drawer" id="sms-drawer">
-          <summary data-i18n="sms.title">No mobile data? Use SMS</summary>
+          <summary><span data-i18n="sms.title">No mobile data? Use SMS</span> <span class="badge" id="sms-badge" hidden></span></summary>
           <p class="muted" data-i18n="sms.lead"></p>
           <div class="phone">
+            <p class="phone-number"><strong id="phone-number"></strong><br><span class="small muted" data-i18n="phone.note"></span></p>
             <ol class="sms-thread" id="sms-thread" aria-live="polite"></ol>
             <form class="sms-form" id="sms-form">
               <input id="sms-text" maxlength="320" autocomplete="off" data-i18n-placeholder="sms.placeholder" aria-label="SMS">
@@ -152,6 +181,19 @@
             <li data-i18n="resp.tip3"></li>
           </ul>
 
+          <div class="card stats-card" id="stats-card">
+            <h2 class="card-title" data-i18n="stats.title">At a glance</h2>
+            <div class="stats-grid" id="stats-grid"></div>
+            <div id="stats-shelters"></div>
+            <a class="btn btn-quiet btn-small export" href="/api/events.csv" download data-i18n="stats.export">Download activity log (CSV)</a>
+          </div>
+
+          <div class="card story-card">
+            <h2 class="card-title" data-i18n="scenario.title">Flood scenario</h2>
+            <p class="muted" data-i18n="scenario.lead"></p>
+            <button type="button" class="btn btn-primary btn-auto" id="scenario-load" data-i18n="scenario.button">Load flood scenario</button>
+          </div>
+
           <div class="card story-card">
             <h2 class="card-title" data-i18n="resp.story">Flood story</h2>
             <p class="muted" data-i18n="resp.story_lead"></p>
@@ -183,6 +225,7 @@
         <div class="scale" id="scale" aria-hidden="true">
           <span class="s1">≤ 5</span><span class="s2">≤ 10</span><span class="s3">≤ 20</span><span class="s4">&gt; 20</span><span class="s5" data-i18n="plan.cutoff">Cut off</span>
         </div>
+        <button type="button" class="btn btn-quiet" id="plan-flood" data-i18n="plan.flood">Test the flood scenario</button>
         <div id="impact" aria-live="polite"></div>
         <h2 class="section-title"><span data-i18n="plan.scenario">Scenario</span> <span class="count" id="scenario-count">0</span></h2>
         <ul class="list" id="scenario-list"></ul>

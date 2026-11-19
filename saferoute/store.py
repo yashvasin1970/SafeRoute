@@ -79,6 +79,38 @@ CREATE TABLE IF NOT EXISTS feeds (             -- live feeds: weather, weather d
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS subscribers (       -- people who get SMS alerts for their street
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone         TEXT NOT NULL UNIQUE,
+    street        TEXT NOT NULL,
+    lang          TEXT NOT NULL DEFAULT 'en',
+    verified      INTEGER NOT NULL DEFAULT 0,
+    pending_street TEXT,                       -- requested by web sign-up, applied once verified
+    pending_lang  TEXT,
+    otp_hash      TEXT,
+    otp_expires   TEXT,
+    otp_attempts  INTEGER NOT NULL DEFAULT 0,
+    otp_sends     TEXT NOT NULL DEFAULT '[]',  -- JSON: when codes were sent (rate limit)
+    shelter_id    TEXT,                        -- shelter their route currently leads to
+    route_roads   TEXT,                        -- JSON: roads of that route (to spot a blocked route)
+    safe_at       TEXT,
+    last_alert_at TEXT,
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS outbox (            -- every SMS SafeRoute sends
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone      TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'queued',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS safe_marks (        -- people who said they are safe, once each
+    who        TEXT PRIMARY KEY,               -- phone, or a salted hash of a web visitor
+    shelter_id TEXT,
+    source     TEXT NOT NULL,
+    at         TEXT NOT NULL
+);
 """
 
 
@@ -167,6 +199,11 @@ class Store:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def all_events(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT id, at, actor, action, detail FROM events ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
     # ---- responder actions -------------------------------------------------------------------
 
     def close_road(self, road_id: str, reason: str, source: str, actor: str, label: str) -> bool:
@@ -210,9 +247,12 @@ class Store:
 
     def reset(self, actor: str) -> None:
         with self._conn() as conn:
-            for table in ("closures", "shelters", "sensors", "occupancy", "arrivals", "reports"):
+            for table in ("closures", "shelters", "sensors", "occupancy", "arrivals", "reports", "safe_marks"):
                 conn.execute(f"DELETE FROM {table}")
             conn.execute("DELETE FROM feeds WHERE key != 'weather'")
+            # Subscribers stay signed up and keep the route they were last told about, so a drill
+            # loaded right after a reset still alerts them when it blocks that route.
+            conn.execute("UPDATE subscribers SET safe_at = NULL, last_alert_at = NULL")
             self._changed(conn, actor, "reset", "Cleared closures, reports and readings; emptied and reopened shelters")
 
     # ---- shelter load ------------------------------------------------------------------------
@@ -378,3 +418,141 @@ class Store:
             else:
                 self._changed(conn, actor, "", "")
             return {"closed": closed, "reopened": reopened}
+
+    # ---- SMS subscribers, outbox and safe marks ------------------------------------------------
+
+    def subscriber(self, phone: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM subscribers WHERE phone = ?", (phone,)).fetchone()
+        return self._subscriber(row) if row else None
+
+    def subscribers(self, verified_only: bool = True) -> list[dict]:
+        query = "SELECT * FROM subscribers" + (" WHERE verified = 1" if verified_only else "") + " ORDER BY id"
+        with self._conn() as conn:
+            rows = conn.execute(query).fetchall()
+        return [self._subscriber(r) for r in rows]
+
+    @staticmethod
+    def _subscriber(row: sqlite3.Row) -> dict:
+        data = dict(row)
+        data["verified"] = bool(data["verified"])
+        data["otp_sends"] = json.loads(data["otp_sends"] or "[]")
+        data["route_roads"] = json.loads(data["route_roads"]) if data["route_roads"] else None
+        return data
+
+    SUBSCRIBER_FIELDS = (
+        "street",
+        "lang",
+        "verified",
+        "otp_hash",
+        "otp_expires",
+        "otp_attempts",
+        "otp_sends",
+        "pending_street",
+        "pending_lang",
+        "shelter_id",
+        "route_roads",
+        "safe_at",
+        "last_alert_at",
+    )
+
+    def save_subscriber(self, sub: dict, actor: str = "", action: str = "", detail: str = "") -> None:
+        """Insert or update a subscriber by phone. Logs an event when an action is given."""
+        values = {
+            "street": sub["street"],
+            "lang": sub.get("lang", "en"),
+            "verified": int(bool(sub.get("verified"))),
+            "otp_hash": sub.get("otp_hash"),
+            "otp_expires": sub.get("otp_expires"),
+            "otp_attempts": int(sub.get("otp_attempts", 0)),
+            "otp_sends": json.dumps(sub.get("otp_sends", [])),
+            "pending_street": sub.get("pending_street"),
+            "pending_lang": sub.get("pending_lang"),
+            "shelter_id": sub.get("shelter_id"),
+            "route_roads": json.dumps(sub["route_roads"]) if sub.get("route_roads") is not None else None,
+            "safe_at": sub.get("safe_at"),
+            "last_alert_at": sub.get("last_alert_at"),
+        }
+        fields = self.SUBSCRIBER_FIELDS
+        with self._conn() as conn:
+            conn.execute(
+                f"INSERT INTO subscribers (phone, {', '.join(fields)}, created_at) "
+                f"VALUES (?, {', '.join('?' * len(fields))}, ?) "
+                f"ON CONFLICT (phone) DO UPDATE SET {', '.join(f'{f} = excluded.{f}' for f in fields)}",
+                (sub["phone"], *[values[f] for f in fields], now_iso()),
+            )
+            if action:
+                self._changed(conn, actor, action, detail)
+
+    def delete_subscriber(self, phone: str, actor: str, detail: str) -> bool:
+        with self._conn() as conn:
+            gone = conn.execute("DELETE FROM subscribers WHERE phone = ?", (phone,)).rowcount > 0
+            if gone:
+                self._changed(conn, actor, "sms stopped", detail)
+            return gone
+
+    def queue_sms(self, phone: str, text: str, kind: str, status: str = "queued") -> int:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO outbox (phone, text, kind, status, created_at) VALUES (?, ?, ?, ?, ?)",
+                (phone, text, kind, status, now_iso()),
+            )
+            return cur.lastrowid
+
+    def set_sms_status(self, message_id: int, status: str) -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE outbox SET status = ? WHERE id = ?", (status, message_id))
+
+    def messages_to(self, phone: str, after_id: int = 0) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, text, kind, created_at FROM outbox WHERE phone = ? AND id > ? ORDER BY id LIMIT 50",
+                (phone, after_id),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def outbox_counts(self) -> dict[str, int]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT kind, COUNT(*) AS n FROM outbox GROUP BY kind").fetchall()
+        return {r["kind"]: r["n"] for r in rows}
+
+    def mark_safe(self, who: str, shelter_id: str | None, source: str, label: str) -> bool:
+        """Count someone as safe. Returns False if they had already said so (the time is updated)."""
+        with self._conn() as conn:
+            existed = conn.execute("SELECT 1 FROM safe_marks WHERE who = ?", (who,)).fetchone() is not None
+            conn.execute(
+                "INSERT INTO safe_marks (who, shelter_id, source, at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (who) DO UPDATE SET shelter_id = excluded.shelter_id, at = excluded.at",
+                (who, shelter_id, source, now_iso()),
+            )
+            conn.execute("UPDATE subscribers SET safe_at = ? WHERE phone = ?", (now_iso(), who))
+            self._changed(conn, "Resident" if source == "app" else "SMS", "" if existed else "safe", label)
+            return not existed
+
+    def safe_marks(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT shelter_id, source, at FROM safe_marks").fetchall()
+        return [dict(r) for r in rows]
+
+    def check_in(self, shelter_id: str, people: int, client: str, label: str, capacity: int) -> int:
+        """People arrived at a shelter: raise its headcount, count them safe, clear their trip.
+
+        A shelter whose headcount reaches its capacity counts as full from then on, so routing
+        stops sending people there and SMS subscribers heading there are alerted.
+        """
+        with self._conn() as conn:
+            row = conn.execute("SELECT people FROM occupancy WHERE shelter_id = ?", (shelter_id,)).fetchone()
+            people_now = min(capacity * 2, (row["people"] if row else 0) + people)
+            conn.execute(
+                "INSERT INTO occupancy (shelter_id, people, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (shelter_id) DO UPDATE SET people = excluded.people, updated_at = excluded.updated_at",
+                (shelter_id, people_now, now_iso()),
+            )
+            conn.execute("DELETE FROM arrivals WHERE client = ? AND shelter_id = ?", (client, shelter_id))
+            conn.execute(
+                "INSERT INTO safe_marks (who, shelter_id, source, at) VALUES (?, ?, 'checkin', ?) "
+                "ON CONFLICT (who) DO UPDATE SET shelter_id = excluded.shelter_id, at = excluded.at",
+                (f"web:{client}", shelter_id, now_iso()),
+            )
+            self._changed(conn, "Resident", "check-in", f"{people} at {label} ({people_now}/{capacity})")
+            return people_now

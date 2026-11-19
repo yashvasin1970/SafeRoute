@@ -257,7 +257,7 @@ def fake_services(network, route=None):
 
 
 ROUTE = {
-    "shelter": {"name": "Shelter B"},
+    "shelter": {"id": "sB", "name": "Shelter B"},
     "eta_s": 200,
     "distance_m": 220,
     "steps": [{"name": "West Lane"}, {"name": "Unnamed road"}],
@@ -267,24 +267,26 @@ ROUTE = {
 def test_sms_route_reply_in_three_languages(network):
     services, _ = fake_services(network, ROUTE)
     english, lang = handle("ROUTE west lane", services)
-    assert lang == "en" and english.startswith("SafeRoute: Walk to Shelter B, 3 min (220 m). Way: West Lane.")
+    assert (
+        lang == "en" and english == "SafeRoute: Walk to Shelter B, 3 min (220 m) via West Lane. Rescue: HELP West Lane"
+    )
     tamil, lang = handle("வழி west lane", services)
-    assert lang == "ta" and "Shelter B" in tamil and "நிமிடம்" in tamil
+    assert lang == "ta" and "Shelter B" in tamil and "நிமி" in tamil
     hindi, lang = handle("रास्ता west lane", services)
     assert lang == "hi" and "मिनट" in hindi
 
 
 def test_sms_no_route_help_flood_shelters_status(network):
     services, made = fake_services(network, None)
-    assert "No open shelter can be reached from West Lane" in handle("ROUTE West Lane", services)[0]
+    assert "No safe route from West Lane now" in handle("ROUTE West Lane", services)[0]
     assert "#7" in handle("HELP South Street", services)[0]
     assert "#7" in handle("FLOOD main rd", services)[0]
     assert made == [("rescue", "South Street"), ("flooding", "Main Road")]
     assert handle("SHELTERS", services)[0] == (
-        "SafeRoute shelters: Shelter A 40% full; Shelter B full. Reply ROUTE <your street> for directions."
+        "SafeRoute shelters: Shelter A 40%; Shelter B full. Directions: ROUTE <street>"
     )
-    assert "3 road segments blocked. Rain: heavy" in handle("status", services)[0]
-    assert "Couldn't find 'Marina'" in handle("ROUTE Marina", services)[0]
+    assert "3 roads blocked. Rain: heavy" in handle("status", services)[0]
+    assert "Can't find 'Marina'" in handle("ROUTE Marina", services)[0]
     assert handle("ROUTE", services)[0].startswith("SafeRoute: Send ROUTE")
     assert handle("what", services)[0].startswith("SafeRoute: Send ROUTE")
 

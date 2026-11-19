@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import math
 import secrets
+from collections import Counter
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from xml.sax.saxutils import escape
 
 from flask import Blueprint, Response, current_app, jsonify, request, session
@@ -16,10 +20,11 @@ from .reports import REPORT_KINDS, client_id, dismiss_report, make_report, verif
 from .risk import Risk, road_risk
 from .routing import PREFERENCES, SHELTER_STATUSES, effective_status, find_route, impact
 from .security import AttemptLimiter, csrf_token, responder_required, same
-from .sms import SmsServices
+from .sms import SmsServices, say
 from .sms import handle as handle_sms
 from .store import Store
 from .story import StoryRunner
+from .subscriptions import is_demo, join_by_sms, mask, normalise_phone, start_signup, verify_signup
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -47,6 +52,21 @@ def story() -> StoryRunner:
 
 def limiter(name: str) -> AttemptLimiter:
     return current_app.extensions[f"saferoute.{name}_limiter"]
+
+
+def messenger():
+    return current_app.extensions["saferoute.messenger"]
+
+
+def alerter():
+    return current_app.extensions["saferoute.alerter"]
+
+
+def kick() -> None:
+    """Ask the alert worker to look at subscribers' routes soon (after a change to the map)."""
+    worker = current_app.extensions.get("saferoute.alerts_worker")
+    if worker is not None:
+        worker.kick()
 
 
 def client() -> str:
@@ -400,6 +420,7 @@ def close_road():
     if reason not in CLOSURE_REASONS:
         return bad(f"reason must be one of: {', '.join(CLOSURE_REASONS)}.")
     changed = store().close_road(road_id, reason, "responder", session["responder"], road_label(road_id))
+    kick()
     return jsonify(changed=changed, version=store().version())
 
 
@@ -409,6 +430,7 @@ def reopen_road(road_id: str):
     if road_id not in network().roads:
         return bad("Unknown road.", 404)
     closure = store().reopen_road(road_id, session["responder"], road_label(road_id))
+    kick()
     return jsonify(changed=closure is not None, version=store().version())
 
 
@@ -434,6 +456,7 @@ def update_shelter(shelter_id: str):
         changed |= store().set_shelter(shelter_id, data["status"], session["responder"], shelter.name)
     if people is not None:
         changed |= store().set_occupancy(shelter_id, int(people), session["responder"], shelter.name, shelter.capacity)
+    kick()
     return jsonify(changed=changed, version=store().version())
 
 
@@ -449,7 +472,23 @@ def handle_report(report_id: int, action: str):
         changed = dismiss_report(store(), report, session["responder"])
     else:
         return bad("action must be verify or dismiss.", 404)
+    kick()
     return jsonify(changed=changed, version=store().version())
+
+
+@bp.post("/scenario/flood")
+@responder_required
+def flood_scenario():
+    """One click: heavy rain, three flooded stretches, shelters filling, two reports."""
+    story().flood_scenario(session["responder"])
+    kick()
+    return jsonify(loaded=True, version=store().version())
+
+
+@bp.get("/scenario/flood/roads")
+def flood_scenario_roads():
+    """The roads the flood scenario would close, so planners can test it without publishing."""
+    return jsonify(roads=story().flood_roads())
 
 
 @bp.post("/story/<action>")
@@ -469,6 +508,7 @@ def flood_story(action: str):
 def reset():
     story().stop()
     store().reset(session["responder"])
+    kick()
     return jsonify(version=store().version())
 
 
@@ -488,6 +528,8 @@ def sensor_reading(sensor_id: str):
     if level is None:
         return bad(f"level_cm must be a number from 0 to {sensor_rules.MAX_LEVEL_CM}.")
     changes = store().record_reading(sensor.id, sensor.roads, round(level, 1), sensor.label)
+    if changes["closed"] or changes["reopened"]:
+        kick()
     return jsonify(
         band=sensor_rules.band(level),
         closed=len(changes["closed"]),
@@ -499,21 +541,34 @@ def sensor_reading(sensor_id: str):
 # ---- SMS ---------------------------------------------------------------------------------------
 
 
-def sms_services() -> SmsServices:
+def sms_services(phone: str | None = None) -> SmsServices:
     def report(kind: str, lat: float, lon: float, note: str, street: str) -> int:
-        made = make_report(network(), kind, lat, lon, note, "sms", client())
+        made = make_report(network(), kind, lat, lon, note, "sms", phone or client())
         return store().add_report(made, "SMS") if made else 0
 
     def shelters() -> list[dict]:
         now = live()
         return [
             {
-                "name": s.name,
+                "name": s.sms_name,
                 "status": now.effective[sid],
                 "load_pct": round(100 * (now.occupancy.get(sid, 0) + now.en_route.get(sid, 0)) / s.capacity),
             }
             for sid, s in network().shelters.items()
         ]
+
+    def join(number: str, street: str, lang: str) -> str:
+        sub = join_by_sms(store(), number, street, lang)
+        welcome = alerter().baseline(sub)
+        kick()
+        return welcome
+
+    def stop(number: str) -> bool:
+        return store().delete_subscriber(number, "SMS", mask(number))
+
+    def safe(number: str) -> None:
+        # An SMS doesn't say where the person is, so no shelter is recorded.
+        store().mark_safe(number, None, "sms", mask(number))
 
     return SmsServices(
         network=network(),
@@ -521,6 +576,10 @@ def sms_services() -> SmsServices:
         report=report,
         shelters=shelters,
         status=lambda: {"closed": len(store().closures()), "rain_level": weather().current().get("level")},
+        phone=phone,
+        join=join,
+        stop=stop,
+        safe=safe,
     )
 
 
@@ -530,22 +589,171 @@ def sms_inbound():
     key = request.headers.get("X-Gateway-Key", "")
     if not key or not same(key, current_app.config["SMS_KEY"]):
         return bad("Unknown gateway.", 401)
-    text = (body() or {}).get("text") if request.is_json else request.form.get("Body")
+    if request.is_json:
+        data = body() or {}
+        text, sender = data.get("text"), data.get("from")
+    else:
+        text, sender = request.form.get("Body"), request.form.get("From")
     if not isinstance(text, str) or not text.strip():
         return bad("Send the message text.")
-    reply, lang = handle_sms(text, sms_services())
+    reply, lang = handle_sms(text, sms_services(normalise_phone(sender) if sender else None))
     if not request.is_json:
         return Response(f"<Response><Message>{escape(reply)}</Message></Response>", mimetype="text/xml")
     return jsonify(reply=reply, lang=lang)
 
 
+def demo_phone(value) -> str | None:
+    phone = normalise_phone(value) if isinstance(value, str) else None
+    return phone if phone and is_demo(phone) else None
+
+
 @bp.post("/sms/simulate")
 def sms_simulate():
-    """The in-app phone: same logic as a real SMS, for people trying the demo."""
-    text = (body() or {}).get("text")
+    """The in-app phone: same logic as a real SMS. Its number is a demo number (+91 0000 ...)."""
+    data = body() or {}
+    text = data.get("text")
     if not isinstance(text, str) or not text.strip() or len(text) > 320:
         return bad("Type a message of up to 320 characters.")
     if not limiter("sms").allow(client()):
         return bad("Too many messages. Try again in a few minutes.", 429, "rate_limited")
-    reply, lang = handle_sms(text, sms_services())
+    reply, lang = handle_sms(text, sms_services(demo_phone(data.get("phone"))))
     return jsonify(reply=reply, lang=lang, version=store().version())
+
+
+@bp.get("/sms/inbox")
+def sms_inbox():
+    """Messages SafeRoute sent to a demo phone (codes and alerts). Real numbers are never readable."""
+    phone = demo_phone(request.args.get("phone"))
+    if phone is None:
+        return bad("Only the in-app demo phone has an inbox here.", 403)
+    return jsonify(messages=store().messages_to(phone, request.args.get("after", 0, type=int)))
+
+
+# ---- alert sign-up, "I'm safe" -----------------------------------------------------------------
+
+
+@bp.post("/subscriptions")
+def subscribe():
+    """Web sign-up for SMS alerts. A code goes to the number; nothing starts until it comes back."""
+    data = body() or {}
+    phone = normalise_phone(data.get("phone", ""))
+    street, lang = data.get("street"), data.get("lang", "en")
+    if phone is None:
+        return bad("Enter a 10-digit Indian mobile number.", 400, "bad_phone")
+    if not is_demo(phone) and not current_app.config.get("SMS_OUTBOUND_URL"):
+        return bad("This demo can only text the in-app phone.", 422, "demo_only")
+    if street not in network().streets:
+        return bad("Pick your street from the list.", 400, "bad_street")
+    if lang not in ("en", "ta", "hi"):
+        return bad("lang must be en, ta or hi.")
+    if not limiter("signup").allow(client()):
+        return bad("Too many sign-ups. Try again in a few minutes.", 429, "rate_limited")
+    outcome, code = start_signup(store(), phone, street, lang, current_app.config["SECRET_KEY"] or "")
+    if outcome == "rate_limited":
+        return bad("Too many codes sent to that number. Try again in an hour.", 429, "otp_limit")
+    messenger().send(phone, say("otp", lang, code=code), "otp")
+    return jsonify(sent=True, to=mask(phone))
+
+
+@bp.post("/subscriptions/verify")
+def confirm_subscription():
+    data = body() or {}
+    phone = normalise_phone(data.get("phone", ""))
+    code = str(data.get("code", ""))
+    if phone is None or not code.isdigit():
+        return bad("Enter the number and the 6-digit code.", 400, "wrong_code")
+    outcome, sub = verify_signup(store(), phone, code, current_app.config["SECRET_KEY"] or "")
+    if outcome != "verified":
+        status = {"wrong": 400, "expired": 400, "locked": 429, "none": 404}[outcome]
+        code_name = {"wrong": "wrong_code", "expired": "code_expired", "locked": "code_locked", "none": "no_signup"}
+        return bad("That code did not work.", status, code_name[outcome])
+    messenger().send(phone, alerter().baseline(sub), "welcome")
+    kick()
+    return jsonify(verified=True, street=sub["street"], version=store().version())
+
+
+@bp.post("/checkin")
+def check_in():
+    """'I've reached the shelter': the shelter's headcount goes up and the person counts as safe."""
+    data = body() or {}
+    shelter = network().shelters.get(data.get("shelter"))
+    people = number(data.get("people", 1), 1, MAX_PARTY)
+    if shelter is None:
+        return bad("Unknown shelter.", 404)
+    if people is None or people != int(people):
+        return bad(f"people must be a whole number from 1 to {MAX_PARTY}.")
+    if not limiter("safe").allow(client()):
+        return bad("Too many requests. Try again in a few minutes.", 429, "rate_limited")
+    inside = store().check_in(shelter.id, int(people), client(), shelter.name, shelter.capacity)
+    kick()
+    return jsonify(inside=inside, capacity=shelter.capacity, full=inside >= shelter.capacity, version=store().version())
+
+
+@bp.post("/safe")
+def im_safe():
+    """A resident says they are safe. Counted once per person, for responders' numbers."""
+    data = body() or {}
+    shelter_id = data.get("shelter")
+    if shelter_id is not None and shelter_id not in network().shelters:
+        return bad("Unknown shelter.", 404)
+    if not limiter("safe").allow(client()):
+        return bad("Too many requests. Try again in a few minutes.", 429, "rate_limited")
+    label = network().shelters[shelter_id].name if shelter_id else "a resident"
+    new = store().mark_safe(f"web:{client()}", shelter_id, "app", label)
+    return jsonify(counted=new, version=store().version())
+
+
+# ---- responder numbers and export --------------------------------------------------------------
+
+
+@bp.get("/stats")
+def stats():
+    if not session.get("responder"):
+        return bad("Sign in as a responder first.", 401)
+    net = network()
+    subs = store().subscribers(verified_only=False)
+    verified = [s for s in subs if s["verified"]]
+    heading = Counter(s["shelter_id"] for s in verified if not s["safe_at"])
+    marks = store().safe_marks()
+    hour_ago = datetime.now(UTC) - timedelta(hours=1)
+    reports = store().reports("open")
+    sms_counts = store().outbox_counts()
+    return jsonify(
+        subscribers={
+            "total": len(verified),
+            "pending": len(subs) - len(verified),
+            "safe": sum(1 for s in verified if s["safe_at"]),
+            "no_route": heading.get(None, 0),
+            "by_shelter": {sid: heading.get(sid, 0) for sid in net.shelters},
+        },
+        safe={
+            "total": len(marks),
+            "last_hour": sum(1 for m in marks if datetime.fromisoformat(m["at"]) >= hour_ago),
+            "by_source": dict(Counter(m["source"] for m in marks)),
+            "at_shelters": dict(Counter(m["shelter_id"] for m in marks if m["shelter_id"])),
+        },
+        reports={"open": len(reports), "rescue": sum(1 for r in reports if r["kind"] == "rescue")},
+        en_route=sum(store().en_route().values()),
+        sms={
+            "total": sum(sms_counts.values()),
+            "alerts": sum(n for k, n in sms_counts.items() if k.startswith("alert_")),
+        },
+    )
+
+
+@bp.get("/events.csv")
+def export_events():
+    """The whole activity log as a spreadsheet, for reports and hand-overs."""
+    if not session.get("responder"):
+        return bad("Sign in as a responder first.", 401)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["id", "time_utc", "who", "action", "detail"])
+    for event in store().all_events():
+        writer.writerow([event["id"], event["at"], event["actor"], event["action"], event["detail"]])
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    return Response(
+        "﻿" + out.getvalue(),  # BOM so Excel reads Tamil and Hindi correctly
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="saferoute-events-{stamp}.csv"'},
+    )

@@ -1,10 +1,10 @@
 {
-  "note": "Sample capacities (people) for the demo shelters. A real deployment loads the official relief-camp list.",
+  "note": "Sample capacities (people) and short names for SMS. A real deployment loads the official relief-camp list.",
   "shelters": {
-    "s1": {"capacity": 150},
-    "s2": {"capacity": 300},
-    "s3": {"capacity": 400},
-    "s4": {"capacity": 500},
-    "s5": {"capacity": 250}
+    "s1": {"capacity": 150, "short": "Akshaya School"},
+    "s2": {"capacity": 300, "short": "SAN Academy"},
+    "s3": {"capacity": 400, "short": "Sivasakthi School"},
+    "s4": {"capacity": 500, "short": "Ganesan School"},
+    "s5": {"capacity": 250, "short": "Rajalakshmi Hall"}
   }
 }
