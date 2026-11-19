@@ -36,13 +36,13 @@ The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (9
 - **Load balancing:** if the nearest shelter is filling up, you are sent where there is space, with
   the reason. *I'm going here* tells the system you are on your way, so the next people spread out.
 - **Report** flooding, a blocked road or a rescue need at a spot on the map. **I'm trapped** drops a
-  pin for responders (and says plainly it does not replace calling 112).
+  pin for responders (and says plainly it does not replace calling 100).
 - **I've reached the shelter** checks you in, raising its live headcount; **I'm safe** tells responders
   you are out of danger; **Share route** gives family a live link to the same route.
 - **Get SMS alerts** for your street: a one-time code to your number confirms it, then SafeRoute texts
   you if your route is blocked or your shelter is lost.
 - The route **updates by itself** when conditions change, with a banner explaining why.
-- If no open shelter can be reached, it says so plainly and gives safety advice and the 112 number.
+- If no open shelter can be reached, it says so plainly and gives safety advice and the 100 number.
 
 ### Responders: *Responders*
 - Sign in with the responder ID and passcode. Only signed-in responders can change the map.
@@ -250,7 +250,7 @@ hackathons), and warm the hosted link a minute before you start, since the free 
 
 Evacuation tools are used by stressed people, older people, on cheap phones, in the rain, with no data.
 SafeRoute has a **large-text, high-contrast** toggle, a prominent **I'm trapped / need help** button
-(which drops a pin for responders and says plainly it does not replace 112), **Share route** so family
+(which drops a pin for responders and says plainly it does not replace 100), **Share route** so family
 can follow the same live route, works offline, and labels its controls with live regions for screen
 readers. It runs fully in English, Tamil and Hindi, and by SMS for phones with no data at all.
 
