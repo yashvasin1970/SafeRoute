@@ -49,7 +49,15 @@ def test_route_input_checks(client):
 
 def test_state_polling_returns_204_when_nothing_changed(client):
     state = client.get("/api/state").json
-    assert state["closures"] == [] and state["shelters"] == {"sA": "open", "sB": "open"}
+    assert state["closures"] == []
+    assert {sid: s["status"] for sid, s in state["shelters"].items()} == {"sA": "open", "sB": "open"}
+    assert state["shelters"]["sA"] == {
+        "status": "open",
+        "set_status": "open",
+        "capacity": 200,
+        "occupancy": 0,
+        "en_route": 0,
+    }
     assert client.get(f"/api/state?since={state['version']}").status_code == 204
     assert client.get("/api/state").headers["Cache-Control"] == "no-store"
 
@@ -242,3 +250,13 @@ def test_text_responses_are_gzipped_for_slow_connections(client):
     assert "Content-Encoding" not in tiny.headers
     icon = client.get("/static/icons/icon-192.png", headers={"Accept-Encoding": "gzip"})  # already compressed
     assert "Content-Encoding" not in icon.headers
+
+
+def test_configured_responder_id_must_match(app, client):
+    app.config["RESPONDER_ID"] = "admin"
+    wrong_id = client.post("/api/responder/login", json={"name": "someone", "passcode": PASSCODE})
+    assert wrong_id.status_code == 401 and wrong_id.json["code"] == "wrong_passcode"
+    wrong_code = client.post("/api/responder/login", json={"name": "admin", "passcode": "nope"})
+    assert wrong_code.status_code == 401
+    ok = client.post("/api/responder/login", json={"name": "ADMIN", "passcode": PASSCODE})
+    assert ok.status_code == 200 and ok.json["responder"] == "ADMIN"

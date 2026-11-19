@@ -1,0 +1,10 @@
+{
+  "note": "Sample capacities (people) for the demo shelters. A real deployment loads the official relief-camp list.",
+  "shelters": {
+    "s1": {"capacity": 150},
+    "s2": {"capacity": 300},
+    "s3": {"capacity": 400},
+    "s4": {"capacity": 500},
+    "s5": {"capacity": 250}
+  }
+}

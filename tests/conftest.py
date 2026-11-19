@@ -37,6 +37,7 @@ ROADS = [
 ]
 PASSCODE = "24681357"
 SENSOR_KEY = "test-device-key"
+SMS_KEY = "test-sms-key"
 
 
 def build_area() -> dict:
@@ -82,6 +83,8 @@ def app(tmp_path):
             "SECRET_KEY": "test-secret",
             "RESPONDER_PASSCODE": PASSCODE,
             "SENSOR_KEY": SENSOR_KEY,
+            "SMS_KEY": SMS_KEY,
+            "STORY_STEP_SECONDS": 0,
             "DATABASE": tmp_path / "test.db",
             "AREA_FILE": area_file,
             "SENSORS_FILE": sensors_file,

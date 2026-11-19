@@ -13,6 +13,8 @@
   --closed-soft: #fee2e2;
   --scenario: #ea580c;
   --scenario-soft: #ffedd5;
+  --risky: #d97706;
+  --risky-soft: #fef3c7;
   --open: #15803d;
   --open-soft: #dcfce7;
   --full: #b45309;
@@ -269,3 +271,81 @@ button, input, select { font: inherit; color: inherit; }
 .popup-actions button.is-danger { border-color: #fca5a5; color: var(--closed); }
 .popup-actions button.is-ok { border-color: #86efac; color: var(--open); }
 .popup-actions button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* ==== v2: language, weather, risk, load, reports, SMS, story ==== */
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.small { font-size: 12px; }
+.top-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lang select { border: 1px solid #cbd5e1; border-radius: 8px; padding: 4px 6px; background: #fff; font-size: 13px; }
+.weather { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--soft); color: var(--ink-2); white-space: nowrap; }
+.weather.is-moderate { background: var(--risky-soft); color: #92400e; }
+.weather.is-heavy, .weather.is-extreme { background: var(--closed-soft); color: #991b1b; font-weight: 600; }
+@media (max-width: 820px) { .weather { display: none; } .live { font-size: 12px; } }
+
+.btn-auto { width: auto; }
+.key-risky { border-color: var(--risky); border-top-style: dashed; }
+.key-report { width: 12px; height: 12px; border: 0; border-radius: 3px; background: var(--risky); }
+
+/* Story banner over the map */
+.story {
+  position: absolute; left: 12px; right: 12px; top: 12px; z-index: 600; max-width: 640px; margin: 0 auto;
+  background: var(--ink); color: #f8fafc; border-radius: 12px; box-shadow: var(--shadow); padding: 12px 14px 10px;
+}
+.story-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.story-label { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #93c5fd; }
+.story-hide { background: transparent; border: 1px solid #475569; color: #e2e8f0; border-radius: 8px; font-size: 12px; padding: 2px 8px; cursor: pointer; }
+.story-text { margin: 6px 0 8px; font-size: 15px; line-height: 1.45; }
+.story-bar { height: 4px; background: #334155; border-radius: 4px; overflow: hidden; }
+.story-bar span { display: block; height: 100%; background: #60a5fa; width: 0; transition: width 400ms ease; }
+.story-card { margin: 12px 0 4px; }
+
+/* Route notes and arrivals */
+.note-line { margin: 8px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+.note-line.is-safe { color: #1e3a8a; }
+.note-line.is-risk { color: #92400e; background: var(--risky-soft); padding: 6px 8px; border-radius: 8px; }
+.note-line.is-balance { color: #14532d; background: var(--open-soft); padding: 6px 8px; border-radius: 8px; }
+.note-line.is-offline { color: #7c2d12; background: var(--scenario-soft); padding: 6px 8px; border-radius: 8px; }
+.result .steps { margin-top: 10px; }
+.arrive { margin-top: 12px; padding-top: 10px; border-top: 1px solid #bfdbfe; }
+.arrive-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.arrive-people { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.arrive-people select { border: 1px solid #cbd5e1; border-radius: 8px; padding: 4px 6px; background: #fff; }
+.arrive-msg { margin: 6px 0 0; font-size: 13px; color: var(--ink-2); }
+.arrive-msg:empty { display: none; }
+
+/* Shelter load */
+.load { display: block; height: 5px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin: 5px 0 2px; }
+.load-fill { display: block; height: 100%; background: var(--open); border-radius: 4px; }
+.load-fill.is-mid { background: var(--risky); }
+.load-fill.is-high { background: var(--closed); }
+.mk-shelter.is-busy { background: var(--risky); }
+
+/* Drawers: report and SMS */
+.drawer { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; background: #fff; }
+.drawer summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.drawer[open] summary { margin-bottom: 6px; }
+.report-kinds { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.report-msg { margin: 0; font-size: 13px; color: var(--ink-2); background: var(--soft); padding: 8px 10px; border-radius: 8px; }
+.phone { border: 1px solid #cbd5e1; border-radius: 16px; padding: 10px; background: #f8fafc; }
+.sms-thread { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.sms-thread:empty { display: none; }
+.bubble { align-self: flex-start; max-width: 88%; background: #e2e8f0; color: var(--ink); padding: 7px 10px; border-radius: 14px 14px 14px 4px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; }
+.bubble.is-me { align-self: flex-end; background: var(--route); color: #fff; border-radius: 14px 14px 4px 14px; }
+.bubble.is-error { background: var(--closed-soft); color: #991b1b; }
+.sms-form { display: flex; gap: 6px; }
+.sms-form input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; }
+.sms-form .btn-primary { width: auto; }
+
+/* Responders: reports */
+.list li.is-rescue { border-color: #fca5a5; background: #fff5f5; }
+.list .popup-actions { margin-top: 6px; }
+
+/* Map markers */
+.mk-report {
+  display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; transform: rotate(45deg);
+  background: var(--risky); color: #fff; font: 800 13px/1 var(--font); border: 2px solid #fff; box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+}
+.mk-report.is-rescue { background: var(--closed); }
+.popup-note { font-size: 13px; background: var(--soft); padding: 6px 8px; border-radius: 8px; margin: 4px 0 8px; }
+.popup-label { font-size: 12px; font-weight: 700; color: var(--muted); margin: 8px 0 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+.popup-input { width: 90px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }

@@ -1,22 +1,32 @@
-"""HTTP API used by the map, by responders and by the flood sensors."""
+"""HTTP API for the map, responders, planners, flood sensors and the SMS gateway."""
 
 from __future__ import annotations
 
 import math
 import secrets
+from dataclasses import dataclass
+from xml.sax.saxutils import escape
 
 from flask import Blueprint, Response, current_app, jsonify, request, session
 
 from . import sensors as sensor_rules
+from .feeds import WeatherFeed
 from .network import MODES, RoadNetwork
-from .routing import SHELTER_STATUSES, find_route, impact
+from .reports import REPORT_KINDS, client_id, dismiss_report, make_report, verify_report
+from .risk import Risk, road_risk
+from .routing import PREFERENCES, SHELTER_STATUSES, effective_status, find_route, impact
 from .security import AttemptLimiter, csrf_token, responder_required, same
+from .sms import SmsServices
+from .sms import handle as handle_sms
 from .store import Store
+from .story import StoryRunner
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
 CLOSURE_REASONS = ("Flooded", "Fallen tree", "Debris or collapse", "Fire", "Accident", "Other")
 MAX_SCENARIO_ITEMS = 300
+ARRIVAL_MINUTES = 45
+MAX_PARTY = 20
 
 
 def network() -> RoadNetwork:
@@ -27,12 +37,24 @@ def store() -> Store:
     return current_app.extensions["saferoute.store"]
 
 
-def login_limiter() -> AttemptLimiter:
-    return current_app.extensions["saferoute.login_limiter"]
+def weather() -> WeatherFeed:
+    return current_app.extensions["saferoute.weather"]
 
 
-def bad(message: str, status: int = 400):
-    return jsonify(error=message), status
+def story() -> StoryRunner:
+    return current_app.extensions["saferoute.story"]
+
+
+def limiter(name: str) -> AttemptLimiter:
+    return current_app.extensions[f"saferoute.{name}_limiter"]
+
+
+def client() -> str:
+    return client_id(current_app.config["SECRET_KEY"] or "", request.remote_addr or "unknown")
+
+
+def bad(message: str, status: int = 400, code: str | None = None):
+    return jsonify(error=message, code=code), status
 
 
 def body() -> dict | None:
@@ -52,7 +74,109 @@ def road_label(road_id: str) -> str:
     return road.name if road.name != "Unnamed road" else f"Unnamed road ({road.id})"
 
 
-# ---- public reads --------------------------------------------------------------------------------
+# ---- the live picture -------------------------------------------------------------------------
+
+
+@dataclass
+class Live:
+    closures: dict
+    statuses: dict[str, str]  # what responders set
+    effective: dict[str, str]  # counting occupancy against capacity
+    occupancy: dict[str, int]
+    en_route: dict[str, int]
+    readings: dict[str, dict]
+    reports: list[dict]
+    weather: dict
+    risk: dict[str, Risk]
+
+
+def live() -> Live:
+    net, db = network(), store()
+    closures = db.closures()
+    statuses, occupancy = db.shelter_status(), db.occupancy()
+    readings = db.sensor_state()
+    reports = db.reports("open")
+    current_weather = weather().current()
+    levels = {sid: r["level_cm"] for sid, r in readings.items()}
+    return Live(
+        closures=closures,
+        statuses=statuses,
+        effective={
+            sid: effective_status(statuses.get(sid, "open"), occupancy.get(sid, 0), shelter.capacity)
+            for sid, shelter in net.shelters.items()
+        },
+        occupancy=occupancy,
+        en_route=db.en_route(),
+        readings=readings,
+        reports=reports,
+        weather=current_weather,
+        risk=road_risk(net, levels, reports, current_weather.get("level"), closures.keys()),
+    )
+
+
+def route_body(lat: float, lon: float, mode: str, prefer: str) -> tuple[dict, int]:
+    """The /api/route response for a point (also used by SMS)."""
+    net = network()
+    snapped = net.nearest_node(lat, lon)
+    if snapped is None:
+        return {
+            "error": "That spot is outside the mapped area. Tap somewhere on the roads shown.",
+            "code": "outside_area",
+        }, 422
+    node, snap_m = snapped
+    state = live()
+    version = store().version()
+    result = find_route(
+        net,
+        node,
+        state.closures.keys(),
+        state.effective,
+        mode,
+        snap_m,
+        occupancy=state.occupancy,
+        en_route=state.en_route,
+        risk=state.risk,
+        prefer=prefer,
+    )
+    route = result.route
+    return {
+        "version": version,
+        "mode": mode,
+        "prefer": prefer,
+        "start": {"node": node, "lat": net.coords[node][0], "lon": net.coords[node][1], "snap_m": round(snap_m)},
+        "route": None
+        if route is None
+        else {
+            "shelter": {"id": route.shelter.id, "name": route.shelter.name},
+            "distance_m": round(route.distance_m),
+            "eta_s": round(route.eta_s),
+            "steps": route.steps,
+            "roads": route.roads,
+            "geometry": route.geometry,
+            "risky": route.risky,
+            "fastest_eta_s": round(route.fastest_eta_s) if route.fastest_eta_s is not None else None,
+            "avoided": route.avoided,
+            "balanced_from": route.balanced_from,
+        },
+        "options": [
+            {
+                "id": o.shelter.id,
+                "name": o.shelter.name,
+                "status": o.status,
+                "reachable": o.reachable,
+                "eta_s": round(o.eta_s) if o.eta_s is not None else None,
+                "distance_m": round(o.distance_m) if o.distance_m is not None else None,
+                "capacity": o.capacity,
+                "occupancy": o.occupancy,
+                "en_route": o.en_route,
+                "load_pct": round(100 * o.load),
+            }
+            for o in result.options
+        ],
+    }, 200
+
+
+# ---- public reads -----------------------------------------------------------------------------
 
 
 @bp.get("/area")
@@ -73,9 +197,21 @@ def state():
         return Response(status=204)
 
     net = network()
-    closures = store().closures()
-    readings = store().sensor_state()
-    statuses = store().shelter_status()
+    now = live()
+    responder = bool(session.get("responder"))
+    reports = [
+        {
+            "id": r["id"],
+            "kind": r["kind"],
+            "lat": r["lat"],
+            "lon": r["lon"],
+            "place": r["place"],
+            "at": r["created_at"],
+            **({"note": r["note"], "source": r["source"]} if responder else {}),
+        }
+        for r in now.reports
+        if responder or r["kind"] != "rescue"  # rescue requests (and all notes) are for responders only
+    ]
     return jsonify(
         version=version,
         closures=[
@@ -87,19 +223,35 @@ def state():
                 "reported_by": c.reported_by,
                 "at": c.created_at,
             }
-            for c in closures.values()
+            for c in now.closures.values()
             if c.road_id in net.roads
         ],
-        shelters={s: statuses.get(s, "open") for s in net.shelters},
+        shelters={
+            sid: {
+                "status": now.effective[sid],
+                "set_status": now.statuses.get(sid, "open"),
+                "capacity": shelter.capacity,
+                "occupancy": now.occupancy.get(sid, 0),
+                "en_route": now.en_route.get(sid, 0),
+            }
+            for sid, shelter in net.shelters.items()
+        },
         sensors={
             sid: {
-                "level_cm": readings.get(sid, {}).get("level_cm", 0.0),
-                "band": sensor_rules.band(readings.get(sid, {}).get("level_cm", 0.0)),
-                "armed": readings.get(sid, {}).get("armed", True),
-                "updated_at": readings.get(sid, {}).get("updated_at"),
+                "level_cm": now.readings.get(sid, {}).get("level_cm", 0.0),
+                "band": sensor_rules.band(now.readings.get(sid, {}).get("level_cm", 0.0)),
+                "armed": now.readings.get(sid, {}).get("armed", True),
+                "updated_at": now.readings.get(sid, {}).get("updated_at"),
             }
             for sid in net.sensors
         },
+        risk={
+            road_id: {"factor": r.factor, "reasons": [reason.as_dict() for reason in r.reasons]}
+            for road_id, r in now.risk.items()
+        },
+        reports=reports,
+        weather=now.weather,
+        story=store().feed("story"),
         events=store().events(15),
     )
 
@@ -111,46 +263,15 @@ def route():
         return bad("Send JSON with lat, lon and mode.")
     lat, lon = number(data.get("lat"), -90, 90), number(data.get("lon"), -180, 180)
     mode = data.get("mode", "foot")
+    prefer = data.get("prefer", "safest")
     if lat is None or lon is None:
         return bad("lat and lon must be numbers.")
     if mode not in MODES:
         return bad(f"mode must be one of {', '.join(MODES)}.")
-
-    net = network()
-    snapped = net.nearest_node(lat, lon)
-    if snapped is None:
-        return bad("That spot is outside the mapped area. Tap somewhere on the roads shown.", 422)
-    node, snap_m = snapped
-
-    version = store().version()
-    result = find_route(net, node, store().closures().keys(), store().shelter_status(), mode, snap_m)
-    route = result.route
-    return jsonify(
-        version=version,
-        mode=mode,
-        start={"node": node, "lat": net.coords[node][0], "lon": net.coords[node][1], "snap_m": round(snap_m)},
-        route=None
-        if route is None
-        else {
-            "shelter": {"id": route.shelter.id, "name": route.shelter.name},
-            "distance_m": round(route.distance_m),
-            "eta_s": round(route.eta_s),
-            "steps": route.steps,
-            "roads": route.roads,
-            "geometry": route.geometry,
-        },
-        options=[
-            {
-                "id": o.shelter.id,
-                "name": o.shelter.name,
-                "status": o.status,
-                "reachable": o.reachable,
-                "eta_s": round(o.eta_s) if o.eta_s is not None else None,
-                "distance_m": round(o.distance_m) if o.distance_m is not None else None,
-            }
-            for o in result.options
-        ],
-    )
+    if prefer not in PREFERENCES:
+        return bad(f"prefer must be one of {', '.join(PREFERENCES)}.")
+    payload, status = route_body(lat, lon, mode, prefer)
+    return jsonify(payload), status
 
 
 @bp.post("/impact")
@@ -168,8 +289,7 @@ def what_if():
     if (
         not isinstance(extra_roads, list)
         or len(extra_roads) > MAX_SCENARIO_ITEMS
-        or any(r not in net.roads for r in extra_roads if isinstance(r, str))
-        or not all(isinstance(r, str) for r in extra_roads)
+        or not all(isinstance(r, str) and r in net.roads for r in extra_roads)
     ):
         return bad("closures must be a list of road ids from this map.")
     if not isinstance(extra_shelters, list) or not all(
@@ -177,11 +297,56 @@ def what_if():
     ):
         return bad("shelters_closed must be a list of shelter ids from this map.")
 
-    result = impact(net, store().closures().keys(), extra_roads, store().shelter_status(), extra_shelters, mode)
+    now = live()
+    result = impact(net, now.closures.keys(), extra_roads, now.effective, extra_shelters, mode)
     return jsonify(version=store().version(), **result)
 
 
-# ---- responders ----------------------------------------------------------------------------------
+# ---- residents --------------------------------------------------------------------------------
+
+
+@bp.post("/arrivals")
+def arrivals():
+    """'I'm heading here': counts people on their way, so the next people are spread out."""
+    data = body() or {}
+    shelter = network().shelters.get(data.get("shelter"))
+    people = number(data.get("people", 1), 1, MAX_PARTY)
+    if shelter is None:
+        return bad("Unknown shelter.", 404)
+    if people is None or people != int(people):
+        return bad(f"people must be a whole number from 1 to {MAX_PARTY}.")
+    if not limiter("arrivals").allow(client()):
+        return bad("Too many requests. Try again in a few minutes.", 429, "rate_limited")
+    if live().effective[shelter.id] != "open":
+        return bad("That shelter is not taking people right now.", 409, "shelter_unavailable")
+    if not store().add_arrival(shelter.id, int(people), client(), ARRIVAL_MINUTES):
+        return bad("You have already told us about three trips.", 429, "too_many_trips")
+    return jsonify(ok=True, minutes=ARRIVAL_MINUTES, version=store().version())
+
+
+@bp.post("/reports")
+def new_report():
+    """Anyone can report flooding, a blocked road or a rescue need. Reports never close roads."""
+    data = body() or {}
+    kind = data.get("kind")
+    lat, lon = number(data.get("lat"), -90, 90), number(data.get("lon"), -180, 180)
+    note = data.get("note", "")
+    if kind not in REPORT_KINDS:
+        return bad(f"kind must be one of {', '.join(REPORT_KINDS)}.")
+    if lat is None or lon is None:
+        return bad("lat and lon must be numbers.")
+    if not isinstance(note, str) or len(note) > 200:
+        return bad("note must be text of at most 200 characters.")
+    if not limiter("reports").allow(client()):
+        return bad("Too many reports. Try again in a few minutes.", 429, "rate_limited")
+    report = make_report(network(), kind, lat, lon, note, "app", client())
+    if report is None:
+        return bad("That spot is outside the mapped area.", 422, "outside_area")
+    report_id = store().add_report(report, "Resident")
+    return jsonify(id=report_id, place=report["place"], version=store().version())
+
+
+# ---- responders -------------------------------------------------------------------------------
 
 
 @bp.get("/session")
@@ -195,18 +360,23 @@ def login():
     if data is None:
         return bad("Send JSON with name and passcode.")
     key = request.remote_addr or "unknown"
-    if login_limiter().blocked(key):
-        return bad("Too many wrong passcodes. Wait five minutes and try again.", 429)
+    if limiter("login").blocked(key):
+        return bad("Too many wrong passcodes. Wait five minutes and try again.", 429, "rate_limited")
 
     name = str(data.get("name", "")).strip()
     passcode = str(data.get("passcode", "")).strip()
     if not 2 <= len(name) <= 60:
-        return bad("Enter your name or unit (2 to 60 characters).")
-    if not passcode or not same(passcode, current_app.config["RESPONDER_PASSCODE"]):
-        login_limiter().fail(key)
-        return bad("That passcode is not right.", 401)
+        return bad("Enter your responder ID or name (2 to 60 characters).", 400, "name_needed")
+    # With a responder ID configured, the ID must match too (case doesn't matter). Both checks
+    # always run, and the error never says which one failed.
+    expected_id = current_app.config.get("RESPONDER_ID")
+    id_ok = same(name.lower(), expected_id.lower()) if expected_id else True
+    passcode_ok = bool(passcode) and same(passcode, current_app.config["RESPONDER_PASSCODE"])
+    if not (id_ok and passcode_ok):
+        limiter("login").fail(key)
+        return bad("That ID or passcode is not right.", 401, "wrong_passcode")
 
-    login_limiter().clear(key)
+    limiter("login").clear(key)
     session.clear()
     session.permanent = True
     session["responder"] = name
@@ -244,25 +414,65 @@ def reopen_road(road_id: str):
 
 @bp.post("/shelters/<shelter_id>")
 @responder_required
-def shelter_status(shelter_id: str):
+def update_shelter(shelter_id: str):
+    """Set a shelter's status, how many people are inside, or both."""
     shelter = network().shelters.get(shelter_id)
     if shelter is None:
         return bad("Unknown shelter.", 404)
-    status = (body() or {}).get("status")
-    if status not in SHELTER_STATUSES:
+    data = body() or {}
+    if "status" not in data and "occupancy" not in data:
+        return bad("Send status and/or occupancy.")
+    if "status" in data and data["status"] not in SHELTER_STATUSES:
         return bad(f"status must be one of: {', '.join(SHELTER_STATUSES)}.")
-    changed = store().set_shelter(shelter_id, status, session["responder"], shelter.name)
+    people = None
+    if "occupancy" in data:
+        people = number(data["occupancy"], 0, shelter.capacity * 2)
+        if people is None or people != int(people):
+            return bad(f"occupancy must be a whole number from 0 to {shelter.capacity * 2}.")
+    changed = False
+    if "status" in data:
+        changed |= store().set_shelter(shelter_id, data["status"], session["responder"], shelter.name)
+    if people is not None:
+        changed |= store().set_occupancy(shelter_id, int(people), session["responder"], shelter.name, shelter.capacity)
     return jsonify(changed=changed, version=store().version())
+
+
+@bp.post("/reports/<int:report_id>/<action>")
+@responder_required
+def handle_report(report_id: int, action: str):
+    report = store().report(report_id)
+    if report is None:
+        return bad("Unknown report.", 404)
+    if action == "verify":
+        changed = verify_report(store(), network(), report, session["responder"])
+    elif action == "dismiss":
+        changed = dismiss_report(store(), report, session["responder"])
+    else:
+        return bad("action must be verify or dismiss.", 404)
+    return jsonify(changed=changed, version=store().version())
+
+
+@bp.post("/story/<action>")
+@responder_required
+def flood_story(action: str):
+    """Play (or stop) the scripted flood evening. Starting it resets the demo first."""
+    if action == "start":
+        return jsonify(started=story().start(session["responder"]), version=store().version())
+    if action == "stop":
+        story().stop()
+        return jsonify(stopped=True, version=store().version())
+    return bad("action must be start or stop.", 404)
 
 
 @bp.post("/reset")
 @responder_required
 def reset():
+    story().stop()
     store().reset(session["responder"])
     return jsonify(version=store().version())
 
 
-# ---- sensors -------------------------------------------------------------------------------------
+# ---- sensors ----------------------------------------------------------------------------------
 
 
 @bp.post("/sensors/<sensor_id>/readings")
@@ -284,3 +494,58 @@ def sensor_reading(sensor_id: str):
         reopened=len(changes["reopened"]),
         version=store().version(),
     )
+
+
+# ---- SMS ---------------------------------------------------------------------------------------
+
+
+def sms_services() -> SmsServices:
+    def report(kind: str, lat: float, lon: float, note: str, street: str) -> int:
+        made = make_report(network(), kind, lat, lon, note, "sms", client())
+        return store().add_report(made, "SMS") if made else 0
+
+    def shelters() -> list[dict]:
+        now = live()
+        return [
+            {
+                "name": s.name,
+                "status": now.effective[sid],
+                "load_pct": round(100 * (now.occupancy.get(sid, 0) + now.en_route.get(sid, 0)) / s.capacity),
+            }
+            for sid, s in network().shelters.items()
+        ]
+
+    return SmsServices(
+        network=network(),
+        route=lambda lat, lon: route_body(lat, lon, "foot", "safest")[0],
+        report=report,
+        shelters=shelters,
+        status=lambda: {"closed": len(store().closures()), "rain_level": weather().current().get("level")},
+    )
+
+
+@bp.post("/sms/inbound")
+def sms_inbound():
+    """Webhook for an SMS gateway. Twilio-style form posts get a TwiML reply; JSON gets JSON."""
+    key = request.headers.get("X-Gateway-Key", "")
+    if not key or not same(key, current_app.config["SMS_KEY"]):
+        return bad("Unknown gateway.", 401)
+    text = (body() or {}).get("text") if request.is_json else request.form.get("Body")
+    if not isinstance(text, str) or not text.strip():
+        return bad("Send the message text.")
+    reply, lang = handle_sms(text, sms_services())
+    if not request.is_json:
+        return Response(f"<Response><Message>{escape(reply)}</Message></Response>", mimetype="text/xml")
+    return jsonify(reply=reply, lang=lang)
+
+
+@bp.post("/sms/simulate")
+def sms_simulate():
+    """The in-app phone: same logic as a real SMS, for people trying the demo."""
+    text = (body() or {}).get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 320:
+        return bad("Type a message of up to 320 characters.")
+    if not limiter("sms").allow(client()):
+        return bad("Too many messages. Try again in a few minutes.", 429, "rate_limited")
+    reply, lang = handle_sms(text, sms_services())
+    return jsonify(reply=reply, lang=lang, version=store().version())

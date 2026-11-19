@@ -5,15 +5,16 @@
  * connection drops.
  *
  * - The page, scripts, styles, icons and road data are cached, so SafeRoute opens offline.
- * - Pages and live state are network-first: online you always see the latest closures; offline
- *   you see the last state this device received.
+ * - The app's code, pages and live state are network-first: online you always get the latest;
+ *   offline you get the last copy this device received. Libraries and icons are cache-first.
  * - Changes (POST/DELETE), routing requests and map tiles are never cached.
  */
-const CACHE = "saferoute-v1";
+const CACHE = "saferoute-v2";
 const SHELL = [
   "/",
   "/static/app.js",
   "/static/app.css",
+  "/static/i18n.js",
   "/static/icon.svg",
   "/static/vendor/leaflet/leaflet.js",
   "/static/vendor/leaflet/leaflet.css",
@@ -66,9 +67,18 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
 
-  if (url.pathname.startsWith("/static/") || url.pathname === "/manifest.webmanifest") {
+  // Libraries and icons rarely change: serve from cache, refresh in the background.
+  if (url.pathname.startsWith("/static/vendor/") || url.pathname.startsWith("/static/icons/")) {
     event.respondWith(staleWhileRevalidate(request));
-  } else if (request.mode === "navigate" || url.pathname === "/api/area" || url.pathname === "/api/state") {
+  } else if (
+    // The app's own code, the page and live data: always fresh online, cached copy offline, so a
+    // new version of the server is never paired with old code.
+    url.pathname.startsWith("/static/") ||
+    url.pathname === "/manifest.webmanifest" ||
+    request.mode === "navigate" ||
+    url.pathname === "/api/area" ||
+    url.pathname === "/api/state"
+  ) {
     event.respondWith(networkFirst(request));
   }
 });

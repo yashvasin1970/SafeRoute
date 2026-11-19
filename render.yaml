@@ -20,6 +20,8 @@ services:
         generateValue: true
       - key: SAFEROUTE_SENSOR_KEY
         generateValue: true
+      - key: SAFEROUTE_SMS_KEY
+        generateValue: true
       - key: SAFEROUTE_TRUST_PROXY
         value: "1"
       - key: SAFEROUTE_SECURE_COOKIES

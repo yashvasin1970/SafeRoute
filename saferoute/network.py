@@ -45,6 +45,9 @@ class Road:
     geometry: tuple[tuple[float, float], ...]
 
 
+DEFAULT_CAPACITY = 200
+
+
 @dataclass(frozen=True)
 class Shelter:
     id: str
@@ -53,6 +56,7 @@ class Shelter:
     lat: float
     lon: float
     node: int
+    capacity: int = DEFAULT_CAPACITY
 
 
 @dataclass(frozen=True)
@@ -107,7 +111,7 @@ def distance_to_line_m(point: tuple[float, float], line: tuple[tuple[float, floa
 class RoadNetwork:
     """An immutable road graph. Closures never modify it; routing filters a view of it instead."""
 
-    def __init__(self, area: dict, sensors: list[dict] | None = None):
+    def __init__(self, area: dict, sensors: list[dict] | None = None, shelter_info: dict | None = None):
         self.meta: dict = area["area"]
         self.coords: dict[int, tuple[float, float]] = {n["id"]: (n["lat"], n["lon"]) for n in area["nodes"]}
         self.roads: dict[str, Road] = {
@@ -122,7 +126,13 @@ class RoadNetwork:
             )
             for r in area["roads"]
         }
-        self.shelters: dict[str, Shelter] = {s["id"]: Shelter(**s) for s in area["shelters"]}
+        shelter_info = shelter_info or {}
+        self.shelters: dict[str, Shelter] = {}
+        for s in area["shelters"]:
+            capacity = int(shelter_info.get(s["id"], {}).get("capacity", s.get("capacity", DEFAULT_CAPACITY)))
+            if capacity <= 0:
+                raise ValueError(f"shelter {s['id']} needs a positive capacity")
+            self.shelters[s["id"]] = Shelter(**{**s, "capacity": capacity})
         self.sensors: dict[str, Sensor] = {}
         for s in sensors or []:
             if s["road"] not in self.roads:
@@ -155,13 +165,21 @@ class RoadNetwork:
             if shelter.node not in self.coords:
                 raise ValueError(f"shelter {shelter.id} sits on unknown junction {shelter.node}")
 
+        # Street name -> its segments, longest first (for SMS and "pick your street").
+        self.streets: dict[str, list[str]] = {}
+        for road in sorted(self.roads.values(), key=lambda r: -r.length_m):
+            if road.name != "Unnamed road":
+                self.streets.setdefault(road.name, []).append(road.id)
+
     @classmethod
-    def load(cls, area_file: Path, sensors_file: Path | None = None) -> RoadNetwork:
+    def load(cls, area_file: Path, sensors_file: Path | None = None, shelters_file: Path | None = None) -> RoadNetwork:
         area = json.loads(Path(area_file).read_text(encoding="utf-8"))
-        sensors = []
+        sensors, shelter_info = [], {}
         if sensors_file and Path(sensors_file).exists():
             sensors = json.loads(Path(sensors_file).read_text(encoding="utf-8"))["sensors"]
-        return cls(area, sensors)
+        if shelters_file and Path(shelters_file).exists():
+            shelter_info = json.loads(Path(shelters_file).read_text(encoding="utf-8"))["shelters"]
+        return cls(area, sensors, shelter_info)
 
     def nearest_node(self, lat: float, lon: float) -> tuple[int, float] | None:
         """The closest junction to a point and how far away it is, or None if outside the area."""
@@ -170,6 +188,22 @@ class RoadNetwork:
             key=lambda pair: pair[1],
         )
         return (node, dist) if dist <= MAX_SNAP_M else None
+
+    def nearest_road(self, lat: float, lon: float, max_m: float) -> tuple[str, float] | None:
+        """The closest road to a point, or None if none is within max_m metres."""
+        road, dist = min(
+            ((r.id, distance_to_line_m((lat, lon), r.geometry)) for r in self.roads.values()),
+            key=lambda pair: pair[1],
+        )
+        return (road, dist) if dist <= max_m else None
+
+    def roads_within(self, lat: float, lon: float, radius_m: float) -> list[str]:
+        return [r.id for r in self.roads.values() if distance_to_line_m((lat, lon), r.geometry) <= radius_m]
+
+    def street_point(self, name: str) -> tuple[float, float]:
+        """A point in the middle of a street's longest segment."""
+        geometry = self.roads[self.streets[name][0]].geometry
+        return geometry[len(geometry) // 2]
 
     def client_payload(self) -> dict:
         """Static data the map needs. It never changes while the app runs, so browsers cache it."""
@@ -189,7 +223,16 @@ class RoadNetwork:
                 for r in self.roads.values()
             ],
             "shelters": [
-                {"id": s.id, "name": s.name, "kind": s.kind, "lat": s.lat, "lon": s.lon} for s in self.shelters.values()
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "kind": s.kind,
+                    "lat": s.lat,
+                    "lon": s.lon,
+                    "node": s.node,
+                    "capacity": s.capacity,
+                }
+                for s in self.shelters.values()
             ],
             "sensors": [
                 {

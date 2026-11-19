@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
   <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='i18n.js') }}" defer></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
 <body>
@@ -25,116 +26,175 @@
       <span class="brand-name">SafeRoute</span>
       <span class="brand-area">{{ area.name }}</span>
     </div>
-    <div class="live" id="live" role="status">
-      <span class="live-dot" aria-hidden="true"></span>
-      <span id="live-text">Connecting…</span>
+    <div class="top-right">
+      <span class="weather" id="weather" role="status" hidden></span>
+      <div class="live" id="live" role="status">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="live-text" data-i18n="live.connecting">Connecting…</span>
+      </div>
+      <label class="lang">
+        <span class="visually-hidden">Language</span>
+        <select id="lang" aria-label="Language">
+          <option value="en">English</option>
+          <option value="ta">தமிழ்</option>
+          <option value="hi">हिन्दी</option>
+        </select>
+      </label>
     </div>
   </header>
 
   <main class="layout">
     <div class="map-wrap">
       <div id="map" aria-label="Evacuation map. Tap where you are to get a route."></div>
+      <div class="story" id="story" role="status" hidden>
+        <div class="story-head">
+          <span class="story-label" id="story-label"></span>
+          <button type="button" class="story-hide" id="story-hide" data-i18n="story.hide">Hide</button>
+        </div>
+        <p class="story-text" id="story-text"></p>
+        <div class="story-bar"><span id="story-bar"></span></div>
+      </div>
       <div class="legend" aria-hidden="true">
-        <div><span class="key key-route"></span>Your route</div>
-        <div><span class="key key-closed"></span>Blocked road</div>
-        <div><span class="key key-scenario"></span>Test closure</div>
-        <div><span class="key key-shelter"></span>Shelter</div>
-        <div><span class="key key-sensor"></span>Flood sensor</div>
+        <div><span class="key key-route"></span><span data-i18n="legend.route">Your route</span></div>
+        <div><span class="key key-closed"></span><span data-i18n="legend.blocked">Blocked road</span></div>
+        <div><span class="key key-risky"></span><span data-i18n="legend.risky">Risky road</span></div>
+        <div><span class="key key-scenario"></span><span data-i18n="legend.test">Test closure</span></div>
+        <div><span class="key key-shelter"></span><span data-i18n="legend.shelter">Shelter</span></div>
+        <div><span class="key key-sensor"></span><span data-i18n="legend.sensor">Flood sensor</span></div>
+        <div><span class="key key-report"></span><span data-i18n="legend.report">Resident report</span></div>
       </div>
     </div>
 
     <aside class="panel" id="panel">
       <nav class="tabs" role="tablist" aria-label="Who are you?">
-        <button role="tab" id="tab-btn-route" aria-controls="tab-route" aria-selected="true" data-tab="route">Find a route</button>
-        <button role="tab" id="tab-btn-respond" aria-controls="tab-respond" aria-selected="false" data-tab="respond" tabindex="-1">Responders</button>
-        <button role="tab" id="tab-btn-plan" aria-controls="tab-plan" aria-selected="false" data-tab="plan" tabindex="-1">Planners</button>
+        <button role="tab" id="tab-btn-route" aria-controls="tab-route" aria-selected="true" data-tab="route" data-i18n="tab.route">Find a route</button>
+        <button role="tab" id="tab-btn-respond" aria-controls="tab-respond" aria-selected="false" data-tab="respond" tabindex="-1" data-i18n="tab.respond">Responders</button>
+        <button role="tab" id="tab-btn-plan" aria-controls="tab-plan" aria-selected="false" data-tab="plan" tabindex="-1" data-i18n="tab.plan">Planners</button>
       </nav>
 
       <!-- Residents -->
       <section class="tab" id="tab-route" role="tabpanel" aria-labelledby="tab-btn-route">
-        <p class="lead">Tap the map where you are. SafeRoute finds the nearest open shelter you can still reach, using only roads that are open right now.</p>
+        <p class="lead" data-i18n="route.lead"></p>
 
         <div class="field-row">
-          <div class="segmented" role="radiogroup" aria-label="How are you travelling?" data-mode-group="route">
-            <button type="button" role="radio" aria-checked="true" data-mode="foot">On foot</button>
-            <button type="button" role="radio" aria-checked="false" data-mode="vehicle">By vehicle</button>
+          <div class="segmented" role="radiogroup" data-i18n-aria="mode.label" data-group="mode">
+            <button type="button" role="radio" aria-checked="true" data-value="foot" data-i18n="mode.foot">On foot</button>
+            <button type="button" role="radio" aria-checked="false" data-value="vehicle" data-i18n="mode.vehicle">By vehicle</button>
           </div>
-          <button type="button" class="btn btn-quiet" id="locate">Use my location</button>
+          <div class="segmented" role="radiogroup" data-i18n-aria="prefer.label" data-group="prefer">
+            <button type="button" role="radio" aria-checked="true" data-value="safest" data-i18n="prefer.safest">Safest</button>
+            <button type="button" role="radio" aria-checked="false" data-value="fastest" data-i18n="prefer.fastest">Fastest</button>
+          </div>
+        </div>
+        <div class="field-row">
+          <button type="button" class="btn btn-quiet" id="locate" data-i18n="route.locate">Use my location</button>
         </div>
 
         <label class="field">
-          <span>Or pick the street you are on</span>
-          <select id="street"><option value="">Choose a street…</option></select>
+          <span data-i18n="route.street">Or pick the street you are on</span>
+          <select id="street"><option value="" data-i18n="route.street_choose">Choose a street…</option></select>
         </label>
 
         <div class="banner" id="route-banner" role="alert" hidden></div>
-        <div id="route-result" aria-live="polite">
-          <div class="empty">
-            <strong>No location yet</strong>
-            <span>Tap anywhere on the map, use your location or pick your street.</span>
-          </div>
-        </div>
+        <div id="route-result" aria-live="polite"></div>
 
-        <h2 class="section-title">Shelters</h2>
+        <details class="drawer" id="report-drawer">
+          <summary data-i18n="report.title">Report something here</summary>
+          <p class="muted" data-i18n="report.hint"></p>
+          <div class="report-kinds" role="group">
+            <button type="button" class="btn btn-quiet" data-kind="flooding" data-i18n="report.flooding">Flooding</button>
+            <button type="button" class="btn btn-quiet" data-kind="blocked" data-i18n="report.blocked">Road blocked</button>
+            <button type="button" class="btn btn-quiet btn-danger-quiet" data-kind="rescue" data-i18n="report.rescue">Need rescue</button>
+          </div>
+          <label class="field">
+            <span data-i18n="report.note">Note (optional)</span>
+            <input id="report-note" maxlength="200" data-i18n-placeholder="report.note_ph">
+          </label>
+          <p class="report-msg" id="report-msg" role="status" hidden></p>
+        </details>
+
+        <details class="drawer" id="sms-drawer">
+          <summary data-i18n="sms.title">No mobile data? Use SMS</summary>
+          <p class="muted" data-i18n="sms.lead"></p>
+          <div class="phone">
+            <ol class="sms-thread" id="sms-thread" aria-live="polite"></ol>
+            <form class="sms-form" id="sms-form">
+              <input id="sms-text" maxlength="320" autocomplete="off" data-i18n-placeholder="sms.placeholder" aria-label="SMS">
+              <button class="btn btn-primary btn-small" type="submit" data-i18n="sms.send">Send</button>
+            </form>
+          </div>
+          <p class="muted small" data-i18n="sms.examples"></p>
+        </details>
+
+        <h2 class="section-title" data-i18n="shelters.title">Shelters</h2>
         <ul class="list" id="shelter-list"></ul>
       </section>
 
       <!-- Responders -->
       <section class="tab" id="tab-respond" role="tabpanel" aria-labelledby="tab-btn-respond" hidden>
         <form id="login-form" class="card" autocomplete="off">
-          <h2 class="card-title">Responder sign-in</h2>
-          <p class="muted">Only authorised responders can mark roads blocked or change a shelter's status.</p>
-          <label class="field"><span>Your name or unit</span><input id="login-name" name="name" maxlength="60" required placeholder="e.g. NDRF Team 4"></label>
-          <label class="field"><span>Responder passcode</span><input id="login-passcode" name="passcode" type="password" inputmode="numeric" required></label>
+          <h2 class="card-title" data-i18n="login.title">Responder sign-in</h2>
+          <p class="muted" data-i18n="login.lead"></p>
+          <label class="field"><span data-i18n="login.id">Responder ID</span><input id="login-name" name="name" maxlength="60" required autocapitalize="off" data-i18n-placeholder="login.id_ph"></label>
+          <label class="field"><span data-i18n="login.passcode">Passcode</span><input id="login-passcode" name="passcode" type="password" required></label>
           <p class="error" id="login-error" role="alert" hidden></p>
-          <button class="btn btn-primary" type="submit">Sign in</button>
+          <button class="btn btn-primary" type="submit" data-i18n="login.submit">Sign in</button>
         </form>
 
         <div id="responder-tools" hidden>
           <div class="signed-in">
-            <span>Signed in as <strong id="responder-name"></strong></span>
-            <button type="button" class="btn btn-quiet btn-small" id="logout">Sign out</button>
+            <span id="responder-name"></span>
+            <button type="button" class="btn btn-quiet btn-small" id="logout" data-i18n="resp.signout">Sign out</button>
           </div>
           <ul class="tips">
-            <li><strong>Tap a road</strong> to mark it blocked.</li>
-            <li><strong>Tap a red road</strong> to reopen it.</li>
-            <li><strong>Tap a shelter</strong> to mark it open, full or closed.</li>
+            <li data-i18n="resp.tip1"></li>
+            <li data-i18n="resp.tip2"></li>
+            <li data-i18n="resp.tip3"></li>
           </ul>
-          <p class="muted">Every change reaches every open map within a few seconds, and routes update straight away.</p>
-          <h2 class="section-title">Blocked roads <span class="count" id="closure-count">0</span></h2>
+
+          <div class="card story-card">
+            <h2 class="card-title" data-i18n="resp.story">Flood story</h2>
+            <p class="muted" data-i18n="resp.story_lead"></p>
+            <div class="field-row">
+              <button type="button" class="btn btn-primary btn-auto" id="story-start" data-i18n="resp.story_start">Play flood story</button>
+              <button type="button" class="btn btn-quiet" id="story-stop" data-i18n="resp.story_stop">Stop</button>
+            </div>
+          </div>
+
+          <h2 class="section-title"><span data-i18n="resp.reports">Resident reports</span> <span class="count" id="report-count">0</span></h2>
+          <ul class="list" id="report-list"></ul>
+
+          <h2 class="section-title"><span data-i18n="resp.blocked">Blocked roads</span> <span class="count" id="closure-count">0</span></h2>
           <ul class="list" id="closure-list"></ul>
-          <button type="button" class="btn btn-danger-quiet" id="reset">Reset demo</button>
+          <button type="button" class="btn btn-danger-quiet" id="reset" data-i18n="resp.reset">Reset demo</button>
         </div>
       </section>
 
       <!-- Planners -->
       <section class="tab" id="tab-plan" role="tabpanel" aria-labelledby="tab-btn-plan" hidden>
-        <p class="lead">Test closures before they happen. Tap roads or shelters to add them to a scenario. <strong>Nothing here is published</strong> and the live map is not changed.</p>
+        <p class="lead" data-i18n="plan.lead"></p>
         <div class="field-row">
-          <div class="segmented" role="radiogroup" aria-label="Travel mode for the test" data-mode-group="plan">
-            <button type="button" role="radio" aria-checked="true" data-mode="foot">On foot</button>
-            <button type="button" role="radio" aria-checked="false" data-mode="vehicle">By vehicle</button>
+          <div class="segmented" role="radiogroup" data-i18n-aria="mode.label" data-group="plan-mode">
+            <button type="button" role="radio" aria-checked="true" data-value="foot" data-i18n="mode.foot">On foot</button>
+            <button type="button" role="radio" aria-checked="false" data-value="vehicle" data-i18n="mode.vehicle">By vehicle</button>
           </div>
-          <label class="toggle"><input type="checkbox" id="coverage" checked> Colour roads by time to shelter</label>
+          <label class="toggle"><input type="checkbox" id="coverage" checked> <span data-i18n="plan.coverage">Colour roads by time to shelter</span></label>
         </div>
         <div class="scale" id="scale" aria-hidden="true">
-          <span class="s1">≤ 5 min</span><span class="s2">≤ 10</span><span class="s3">≤ 20</span><span class="s4">&gt; 20</span><span class="s5">Cut off</span>
+          <span class="s1">≤ 5</span><span class="s2">≤ 10</span><span class="s3">≤ 20</span><span class="s4">&gt; 20</span><span class="s5" data-i18n="plan.cutoff">Cut off</span>
         </div>
         <div id="impact" aria-live="polite"></div>
-        <h2 class="section-title">Scenario <span class="count" id="scenario-count">0</span></h2>
+        <h2 class="section-title"><span data-i18n="plan.scenario">Scenario</span> <span class="count" id="scenario-count">0</span></h2>
         <ul class="list" id="scenario-list"></ul>
-        <button type="button" class="btn btn-quiet" id="scenario-clear">Clear scenario</button>
+        <button type="button" class="btn btn-quiet" id="scenario-clear" data-i18n="plan.clear">Clear scenario</button>
       </section>
 
       <section class="activity">
-        <h2 class="section-title">Activity</h2>
+        <h2 class="section-title" data-i18n="activity.title">Activity</h2>
         <ol class="events" id="events"></ol>
       </section>
 
-      <footer class="note">
-        Road data © OpenStreetMap contributors. Shelters and sensors are sample data for this demo.
-        SafeRoute is not a certified warning system. In an emergency, call <strong>112</strong>.
-      </footer>
+      <footer class="note" data-i18n="footer.note"></footer>
     </aside>
   </main>
 

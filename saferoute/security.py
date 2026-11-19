@@ -16,10 +16,13 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, session
 
+RESPONDER_ID_ENV = "SAFEROUTE_RESPONDER_ID"  # optional: when set, responders must sign in with this ID
+
 ENV_OVERRIDES = {
     "secret_key": "SAFEROUTE_SECRET_KEY",
     "responder_passcode": "SAFEROUTE_RESPONDER_PASSCODE",
     "sensor_key": "SAFEROUTE_SENSOR_KEY",
+    "sms_key": "SAFEROUTE_SMS_KEY",
 }
 
 
@@ -34,6 +37,7 @@ def load_secrets(instance: Path) -> dict[str, str]:
         "secret_key": lambda: secrets.token_hex(32),
         "responder_passcode": lambda: f"{secrets.randbelow(10**8):08d}",
         "sensor_key": lambda: secrets.token_urlsafe(24),
+        "sms_key": lambda: secrets.token_urlsafe(24),
     }
     missing = [key for key in makers if key not in stored]
     for key in missing:
@@ -75,6 +79,15 @@ class AttemptLimiter:
     def clear(self, key: str) -> None:
         with self._lock:
             self._fails.pop(key, None)
+
+    def allow(self, key: str) -> bool:
+        """For plain rate limits: count this attempt and say whether it is within the limit."""
+        with self._lock:
+            hits = self._trim(key, time.monotonic())
+            if len(hits) >= self.limit:
+                return False
+            hits.append(time.monotonic())
+            return True
 
 
 def csrf_token() -> str:

@@ -9,3 +9,5 @@ data/raw/
 *.db
 *.db-wal
 *.db-shm
+tools/
+docs/deck-src/
