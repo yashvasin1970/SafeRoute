@@ -45,7 +45,8 @@ The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (9
 - If no open shelter can be reached, it says so plainly and gives safety advice and the 100 number.
 
 ### Responders: *Responders*
-- Sign in with the responder ID and passcode. Only signed-in responders can change the map.
+- Sign in with just your name or unit — the sign-in screen gates the responder tools. A passcode is
+  optional (off by default; set `SAFEROUTE_RESPONDER_PASSCODE` to require one). Only signed-in responders change the map.
 - Block and reopen roads; mark shelters open, full or closed and set **how many people are inside**.
 - See resident reports (rescue requests and notes are visible to responders only), and **verify**
   them (which closes the road) or **dismiss** them.
@@ -164,7 +165,7 @@ passcode. To set your own, copy `.env.example` to `.env`:
 | Variable | Purpose |
 |---|---|
 | `SAFEROUTE_RESPONDER_ID` | Optional: require this responder ID at sign-in (otherwise any name or unit works) |
-| `SAFEROUTE_RESPONDER_PASSCODE` | Passcode responders sign in with |
+| `SAFEROUTE_RESPONDER_PASSCODE` | Optional: require this passcode at sign-in (off by default — a name alone signs in) |
 | `SAFEROUTE_SENSOR_KEY` | Device key flood sensors send |
 | `SAFEROUTE_SMS_KEY` | Key an SMS gateway sends to `/api/sms/inbound` |
 | `SAFEROUTE_SECRET_KEY` | Signs session cookies |
@@ -234,7 +235,7 @@ hackathons), and warm the hosted link a minute before you start, since the free 
 ## Security
 
 - **Only authorised responders change the map** (the proposal's answer to false reports). ID and
-  passcode compared in constant time; 5 wrong attempts per 5 minutes per address, then a lock-out.
+  any configured passcode/ID is compared in constant time; 5 wrong attempts per 5 minutes per address, then a lock-out. (The demo is passwordless by default; set a passcode for a real deployment.)
 - **Resident reports never close roads** on their own; rescue requests and all notes are shown to
   responders only. Reports, arrivals and SMS are rate-limited per (hashed) address.
 - **CSRF protection** on every responder change; `HttpOnly`, `SameSite` and (hosted) `Secure` cookies.

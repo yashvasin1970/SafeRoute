@@ -388,3 +388,27 @@ body.a11y .btn-quiet { border-color: #334155; }
 body.a11y :focus-visible { outline-width: 4px; }
 body.a11y .legend { font-size: 14px; }
 body.a11y .basemap { opacity: 0.6; }
+
+/* ==== v4: responder sign-in screen (modal) ==== */
+body.modal-open { overflow: hidden; }
+.modal { position: fixed; inset: 0; z-index: 4000; display: grid; place-items: center; padding: 20px; }
+.modal-backdrop { position: absolute; inset: 0; background: rgb(15 23 42 / 55%); backdrop-filter: blur(2px); }
+.signin-card {
+  position: relative; z-index: 1; width: min(420px, 100%); background: var(--panel); border-radius: 18px;
+  box-shadow: 0 24px 60px rgb(15 23 42 / 35%); padding: 32px 30px 24px; display: grid; gap: 4px;
+  animation: pop-in 180ms ease;
+}
+@keyframes pop-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } }
+@media (prefers-reduced-motion: reduce) { .signin-card { animation: none; } }
+.signin-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.signin-lock {
+  display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px;
+  background: var(--blue, var(--route)); color: #fff; flex: none;
+}
+.signin-area { font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: 0.01em; }
+.signin-title { font-size: 24px; font-weight: 700; margin: 0; color: var(--ink); }
+.signin-card .muted { margin: 2px 0 16px; }
+.signin-card .field { margin-bottom: 14px; }
+.signin-card .btn-primary { margin-top: 4px; padding: 11px 14px; font-size: 16px; }
+.signin-close { margin: 12px auto 0; text-align: center; }
+body.a11y .signin-card { zoom: 1.1; }

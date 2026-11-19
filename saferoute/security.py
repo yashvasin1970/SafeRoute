@@ -20,22 +20,19 @@ RESPONDER_ID_ENV = "SAFEROUTE_RESPONDER_ID"  # optional: when set, responders mu
 
 ENV_OVERRIDES = {
     "secret_key": "SAFEROUTE_SECRET_KEY",
-    "responder_passcode": "SAFEROUTE_RESPONDER_PASSCODE",
     "sensor_key": "SAFEROUTE_SENSOR_KEY",
     "sms_key": "SAFEROUTE_SMS_KEY",
 }
+# The responder passcode is NOT generated: responders sign in with just a name by default. Set
+# SAFEROUTE_RESPONDER_PASSCODE to require a passcode (e.g. in production).
 
 
 def load_secrets(instance: Path) -> dict[str, str]:
-    """Secrets come from the environment, or are generated once and kept in instance/secrets.json.
-
-    Nothing is hard-coded, so a fresh checkout never runs with a known passcode.
-    """
+    """Secrets come from the environment, or are generated once and kept in instance/secrets.json."""
     path = instance / "secrets.json"
     stored: dict[str, str] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     makers = {
         "secret_key": lambda: secrets.token_hex(32),
-        "responder_passcode": lambda: f"{secrets.randbelow(10**8):08d}",
         "sensor_key": lambda: secrets.token_urlsafe(24),
         "sms_key": lambda: secrets.token_urlsafe(24),
     }

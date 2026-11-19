@@ -943,11 +943,24 @@
     );
   }
 
+  function openSignin() {
+    $("#signin").hidden = false;
+    document.body.classList.add("modal-open");
+    $("#login-error").hidden = true;
+    setTimeout(() => $("#login-name").focus(), 60);
+  }
+
+  function closeSignin() {
+    $("#signin").hidden = true;
+    document.body.classList.remove("modal-open");
+  }
+
   function renderResponder() {
     const signedIn = Boolean(state.session.responder);
-    $("#login-form").hidden = signedIn;
     $("#responder-tools").hidden = !signedIn;
     $("#responder-name").textContent = signedIn ? t("resp.signed", { name: state.session.responder }) : "";
+    if (signedIn) closeSignin();
+    else if (state.tab === "respond") openSignin();
     renderClosureList();
     renderReportList();
     if (signedIn) loadStatsSoon();
@@ -1290,6 +1303,9 @@
       if (selected && focus) button.focus();
     }
     for (const panel of $$(".tab")) panel.hidden = panel.id !== `tab-${name}`;
+    // The Responders area is gated by the sign-in screen until a responder is signed in.
+    if (name === "respond" && !state.session.responder) openSignin();
+    else closeSignin();
     if (map) {
       map.closePopup();
       restyleRoads();
@@ -1373,10 +1389,10 @@
       const error = $("#login-error");
       error.hidden = true;
       try {
-        const data = await api("/api/responder/login", { body: { name: $("#login-name").value, passcode: $("#login-passcode").value } });
+        const data = await api("/api/responder/login", { body: { name: $("#login-name").value, passcode: $("#login-passcode")?.value || "" } });
         state.session.responder = data.responder;
         state.session.csrf = data.csrf;
-        $("#login-passcode").value = "";
+        $("#login-name").value = "";
         renderResponder();
         toast(t("toast.signed_in", { name: data.responder }));
         syncNow(true);
@@ -1384,6 +1400,16 @@
         error.textContent = errorText(err);
         error.hidden = false;
       }
+    });
+
+    const leaveSignin = () => {
+      closeSignin();
+      selectTab("route", true);
+    };
+    $("#signin-close").addEventListener("click", leaveSignin);
+    $("#signin-backdrop").addEventListener("click", leaveSignin);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !$("#signin").hidden) leaveSignin();
     });
 
     $("#logout").addEventListener("click", async () => {

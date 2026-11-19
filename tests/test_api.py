@@ -260,3 +260,17 @@ def test_configured_responder_id_must_match(app, client):
     assert wrong_code.status_code == 401
     ok = client.post("/api/responder/login", json={"name": "ADMIN", "passcode": PASSCODE})
     assert ok.status_code == 200 and ok.json["responder"] == "ADMIN"
+
+
+def test_passwordless_responder_signin_by_default(app):
+    """With no passcode configured, a name alone signs a responder in."""
+    app.config["RESPONDER_PASSCODE"] = ""
+    app.config["RESPONDER_ID"] = None
+    client = app.test_client()
+    too_short = client.post("/api/responder/login", json={"name": "A"})
+    assert too_short.status_code == 400 and too_short.json["code"] == "name_needed"
+    ok = client.post("/api/responder/login", json={"name": "NDRF Team 4"})
+    assert ok.status_code == 200 and ok.json["responder"] == "NDRF Team 4"
+    # ...and they can change the map without ever sending a passcode.
+    headers = {"X-CSRF-Token": ok.json["csrf"]}
+    assert client.post("/api/closures", json={"road": "r03", "reason": "Flooded"}, headers=headers).status_code == 200

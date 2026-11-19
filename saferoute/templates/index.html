@@ -161,15 +161,6 @@
 
       <!-- Responders -->
       <section class="tab" id="tab-respond" role="tabpanel" aria-labelledby="tab-btn-respond" hidden>
-        <form id="login-form" class="card" autocomplete="off">
-          <h2 class="card-title" data-i18n="login.title">Responder sign-in</h2>
-          <p class="muted" data-i18n="login.lead"></p>
-          <label class="field"><span data-i18n="login.id">Responder ID</span><input id="login-name" name="name" maxlength="60" required autocapitalize="off" data-i18n-placeholder="login.id_ph"></label>
-          <label class="field"><span data-i18n="login.passcode">Passcode</span><input id="login-passcode" name="passcode" type="password" required></label>
-          <p class="error" id="login-error" role="alert" hidden></p>
-          <button class="btn btn-primary" type="submit" data-i18n="login.submit">Sign in</button>
-        </form>
-
         <div id="responder-tools" hidden>
           <div class="signed-in">
             <span id="responder-name"></span>
@@ -240,6 +231,25 @@
       <footer class="note" data-i18n="footer.note"></footer>
     </aside>
   </main>
+
+  <!-- Responder sign-in screen -->
+  <div class="modal" id="signin" role="dialog" aria-modal="true" aria-labelledby="signin-title" hidden>
+    <div class="modal-backdrop" id="signin-backdrop"></div>
+    <form id="login-form" class="signin-card" autocomplete="off">
+      <div class="signin-brand">
+        <span class="signin-lock" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 0 1 6 0v3H9zm3 4a1.5 1.5 0 0 1 .75 2.8V19a.75.75 0 0 1-1.5 0v-2.2A1.5 1.5 0 0 1 12 14z"/></svg>
+        </span>
+        <span class="signin-area">SafeRoute · {{ area.name }}</span>
+      </div>
+      <h2 class="signin-title" id="signin-title" data-i18n="login.title">Responder sign-in</h2>
+      <p class="muted" data-i18n="login.lead"></p>
+      <label class="field"><span data-i18n="login.id">Your name or unit</span><input id="login-name" name="name" maxlength="60" required autocapitalize="words" autocomplete="off" data-i18n-placeholder="login.id_ph"></label>
+      <p class="error" id="login-error" role="alert" hidden></p>
+      <button class="btn btn-primary" type="submit" data-i18n="login.submit">Sign in</button>
+      <button type="button" class="link-button signin-close" id="signin-close" data-i18n="signin.close">Back to the map</button>
+    </form>
+  </div>
 
   <div class="toast" id="toast" role="status" hidden></div>
 </body>

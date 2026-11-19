@@ -50,7 +50,8 @@ def create_app(overrides: dict | None = None) -> Flask:
     )
     app.config.update(
         SECRET_KEY=secrets_.get("secret_key"),
-        RESPONDER_PASSCODE=secrets_.get("responder_passcode"),
+        # Empty by default: responders sign in with a name only. Set the env var to require a passcode.
+        RESPONDER_PASSCODE=os.environ.get("SAFEROUTE_RESPONDER_PASSCODE", "").strip(),
         RESPONDER_ID=None
         if overrides.get("TESTING")
         else (os.environ.get("SAFEROUTE_RESPONDER_ID", "").strip() or None),

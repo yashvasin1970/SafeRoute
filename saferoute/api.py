@@ -386,12 +386,13 @@ def login():
     name = str(data.get("name", "")).strip()
     passcode = str(data.get("passcode", "")).strip()
     if not 2 <= len(name) <= 60:
-        return bad("Enter your responder ID or name (2 to 60 characters).", 400, "name_needed")
-    # With a responder ID configured, the ID must match too (case doesn't matter). Both checks
-    # always run, and the error never says which one failed.
+        return bad("Enter your name or unit (2 to 60 characters).", 400, "name_needed")
+    # Responders sign in with a name only by default. A passcode and/or an ID are checked only when
+    # configured (SAFEROUTE_RESPONDER_PASSCODE / _ID); both run, and the error never says which failed.
+    required_passcode = current_app.config.get("RESPONDER_PASSCODE") or ""
     expected_id = current_app.config.get("RESPONDER_ID")
     id_ok = same(name.lower(), expected_id.lower()) if expected_id else True
-    passcode_ok = bool(passcode) and same(passcode, current_app.config["RESPONDER_PASSCODE"])
+    passcode_ok = (not required_passcode) or (bool(passcode) and same(passcode, required_passcode))
     if not (id_ok and passcode_ok):
         limiter("login").fail(key)
         return bad("That ID or passcode is not right.", 401, "wrong_passcode")
