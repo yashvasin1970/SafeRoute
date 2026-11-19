@@ -9,7 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -74,6 +74,19 @@ def create_app(overrides: dict | None = None) -> Flask:
     @app.get("/")
     def index():
         return render_template("index.html", area=net.meta)
+
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        response = send_from_directory(app.static_folder, "manifest.webmanifest")
+        response.mimetype = "application/manifest+json"
+        return response
+
+    @app.get("/sw.js")
+    def service_worker():
+        # Served from the root so it can control the whole app; browsers re-check it on every visit.
+        response = send_from_directory(app.static_folder, "sw.js", mimetype="text/javascript", max_age=0)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/healthz")
     def health():

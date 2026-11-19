@@ -338,7 +338,10 @@
       state.route.error = null;
     } catch (error) {
       state.route.result = null;
-      state.route.error = error.message;
+      state.route.error =
+        error.status === undefined
+          ? "You're offline. Finding a route needs a connection; the map still shows the last closures this device received."
+          : error.message;
     }
     drawRoute(fit);
     renderRouteResult();
@@ -945,4 +948,9 @@
   }
 
   init();
+
+  // Installable app and offline support (see /sw.js).
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch((error) => console.warn("Offline support unavailable", error));
+  }
 })();

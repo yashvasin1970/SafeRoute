@@ -205,3 +205,20 @@ def test_hosted_mode_trusts_the_proxy_and_secures_cookies(monkeypatch, tmp_path)
     )
     assert "Secure" in login.headers["Set-Cookie"]
     app.extensions["saferoute.store"].close()
+
+
+def test_installable_app_files(client):
+    manifest = client.get("/manifest.webmanifest")
+    assert manifest.status_code == 200
+    assert manifest.mimetype == "application/manifest+json"
+    data = manifest.json if manifest.is_json else json.loads(manifest.data)
+    assert data["display"] == "standalone" and data["start_url"] == "/"
+    for icon in data["icons"]:
+        assert client.get(icon["src"]).status_code == 200
+
+    worker = client.get("/sw.js")
+    assert worker.status_code == 200
+    assert worker.mimetype == "text/javascript"
+    assert worker.headers["Cache-Control"] == "no-cache"
+    page = client.get("/").data
+    assert b'rel="manifest"' in page and b"apple-touch-icon" in page
