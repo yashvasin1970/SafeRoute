@@ -98,7 +98,12 @@ public class MainActivity extends Activity {
 
     /** The saved server link, or the one built into the app. */
     private String serverUrl() {
-        return prefs.getString(KEY_URL, getString(R.string.saferoute_url));
+        String saved = prefs.getString(KEY_URL, null);
+        // Temporary tunnel links from older versions expire; use the permanent link instead.
+        if (saved == null || saved.contains("trycloudflare.com")) {
+            return getString(R.string.saferoute_url);
+        }
+        return saved;
     }
 
     /** Turns what someone typed into a usable link, or null if it is not one. */
