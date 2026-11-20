@@ -6,7 +6,7 @@ import json
 
 from saferoute import create_app
 
-from .conftest import PASSCODE, SENSOR_KEY, build_area
+from .conftest import SENSOR_KEY, build_area
 
 NEAR_JUNCTION_0 = {"lat": 13.0, "lon": 80.0001}
 
@@ -76,16 +76,17 @@ def test_responder_changes_need_the_csrf_token(responder):
     assert client.post("/api/closures", json=closure, headers={"X-CSRF-Token": "wrong"}).status_code == 403
 
 
-def test_wrong_passcode_and_rate_limit(client):
+def test_wrong_name_and_rate_limit(app, client):
+    app.config["RESPONDER_ID"] = "admin"  # sign-in limited to one name, so a wrong name is refused
     for _ in range(5):
-        response = client.post("/api/responder/login", json={"name": "Someone", "passcode": "00000000"})
-        assert response.status_code == 401
-    blocked = client.post("/api/responder/login", json={"name": "Someone", "passcode": PASSCODE})
-    assert blocked.status_code == 429  # even the right passcode waits once blocked
+        response = client.post("/api/responder/login", json={"name": "Someone"})
+        assert response.status_code == 401 and response.json["code"] == "name_not_allowed"
+    blocked = client.post("/api/responder/login", json={"name": "admin"})
+    assert blocked.status_code == 429  # even the right name waits once blocked
 
 
 def test_login_needs_a_name(client):
-    response = client.post("/api/responder/login", json={"name": "", "passcode": PASSCODE})
+    response = client.post("/api/responder/login", json={"name": ""})
     assert response.status_code == 400
 
 
@@ -196,7 +197,6 @@ def test_hosted_mode_trusts_the_proxy_and_secures_cookies(monkeypatch, tmp_path)
         {
             "TESTING": True,
             "SECRET_KEY": "s",
-            "RESPONDER_PASSCODE": PASSCODE,
             "SENSOR_KEY": SENSOR_KEY,
             "DATABASE": tmp_path / "h.db",
             "AREA_FILE": area_file,
@@ -208,7 +208,7 @@ def test_hosted_mode_trusts_the_proxy_and_secures_cookies(monkeypatch, tmp_path)
     assert page.headers["Strict-Transport-Security"].startswith("max-age=")
     login = client.post(
         "/api/responder/login",
-        json={"name": "Team", "passcode": PASSCODE},
+        json={"name": "Team"},
         headers={"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"},
     )
     assert "Secure" in login.headers["Set-Cookie"]
@@ -254,17 +254,14 @@ def test_text_responses_are_gzipped_for_slow_connections(client):
 
 def test_configured_responder_id_must_match(app, client):
     app.config["RESPONDER_ID"] = "admin"
-    wrong_id = client.post("/api/responder/login", json={"name": "someone", "passcode": PASSCODE})
-    assert wrong_id.status_code == 401 and wrong_id.json["code"] == "wrong_passcode"
-    wrong_code = client.post("/api/responder/login", json={"name": "admin", "passcode": "nope"})
-    assert wrong_code.status_code == 401
-    ok = client.post("/api/responder/login", json={"name": "ADMIN", "passcode": PASSCODE})
+    wrong_id = client.post("/api/responder/login", json={"name": "someone"})
+    assert wrong_id.status_code == 401 and wrong_id.json["code"] == "name_not_allowed"
+    ok = client.post("/api/responder/login", json={"name": "ADMIN"})  # match is case-insensitive
     assert ok.status_code == 200 and ok.json["responder"] == "ADMIN"
 
 
 def test_passwordless_responder_signin_by_default(app):
-    """With no passcode configured, a name alone signs a responder in."""
-    app.config["RESPONDER_PASSCODE"] = ""
+    """With no responder ID configured, a name alone signs a responder in."""
     app.config["RESPONDER_ID"] = None
     client = app.test_client()
     too_short = client.post("/api/responder/login", json={"name": "A"})

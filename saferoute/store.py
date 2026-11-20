@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS reports (           -- resident reports, by app or SM
     roads      TEXT NOT NULL DEFAULT '[]',     -- JSON: roads close enough to be risky
     place      TEXT NOT NULL,                  -- street name for messages
     note       TEXT NOT NULL DEFAULT '',       -- shown to responders only
+    people     INTEGER NOT NULL DEFAULT 1,     -- rescue requests: how many people need help
     source     TEXT NOT NULL,                  -- 'app', 'sms' or 'story'
     client     TEXT NOT NULL,
     status     TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'verified', 'dismissed')),
@@ -149,6 +150,10 @@ class Store:
         with self._conn() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            # Databases created before the people column existed get it added once.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(reports)")}
+            if "people" not in columns:
+                conn.execute("ALTER TABLE reports ADD COLUMN people INTEGER NOT NULL DEFAULT 1")
         # Keep one connection open for the app's lifetime. Otherwise every short-lived connection
         # is the last one to close, and SQLite checkpoints and deletes its write-ahead log each time.
         self._keeper = sqlite3.connect(self.path, check_same_thread=False)
@@ -245,6 +250,18 @@ class Store:
             self._changed(conn, actor, f"shelter {status}", label)
             return True
 
+    def close_many(self, road_ids: list[str], reason: str, actor: str, detail: str) -> int:
+        """Close several roads in one go, with one activity-log entry. Returns how many were newly closed."""
+        with self._conn() as conn:
+            cur = conn.executemany(
+                "INSERT OR IGNORE INTO closures (road_id, reason, source, reported_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(road_id, reason, "responder", actor, now_iso()) for road_id in road_ids],
+            )
+            if cur.rowcount > 0:
+                self._changed(conn, actor, "closed", detail)
+            return max(cur.rowcount, 0)
+
     def reset(self, actor: str) -> None:
         with self._conn() as conn:
             for table in ("closures", "shelters", "sensors", "occupancy", "arrivals", "reports", "safe_marks"):
@@ -303,8 +320,8 @@ class Store:
     def add_report(self, report: dict, actor: str) -> int:
         with self._conn() as conn:
             cur = conn.execute(
-                "INSERT INTO reports (kind, lat, lon, road_id, roads, place, note, source, client, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO reports (kind, lat, lon, road_id, roads, place, note, source, client, created_at, people) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     report["kind"],
                     report["lat"],
@@ -316,6 +333,7 @@ class Store:
                     report["source"],
                     report["client"],
                     now_iso(),
+                    int(report.get("people", 1)),
                 ),
             )
             what = {"flooding": "flooding", "blocked": "a blocked road", "rescue": "a rescue request"}[report["kind"]]

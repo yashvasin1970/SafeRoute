@@ -32,7 +32,7 @@ def place_name(network: RoadNetwork, road_id: str) -> str:
 
 
 def make_report(
-    network: RoadNetwork, kind: str, lat: float, lon: float, note: str, source: str, client: str
+    network: RoadNetwork, kind: str, lat: float, lon: float, note: str, source: str, client: str, people: int = 1
 ) -> dict | None:
     """Build a report snapped to the nearest road, or None if the spot is off the map."""
     nearest = network.nearest_road(lat, lon, MAX_REPORT_DISTANCE_M)
@@ -50,6 +50,7 @@ def make_report(
         "note": clean_note,
         "source": source,
         "client": client,
+        "people": people,
     }
 
 

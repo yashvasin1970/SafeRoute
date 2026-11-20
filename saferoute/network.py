@@ -116,7 +116,13 @@ def distance_to_line_m(point: tuple[float, float], line: tuple[tuple[float, floa
 class RoadNetwork:
     """An immutable road graph. Closures never modify it; routing filters a view of it instead."""
 
-    def __init__(self, area: dict, sensors: list[dict] | None = None, shelter_info: dict | None = None):
+    def __init__(
+        self,
+        area: dict,
+        sensors: list[dict] | None = None,
+        shelter_info: dict | None = None,
+        history: dict | None = None,
+    ):
         self.meta: dict = area["area"]
         self.coords: dict[int, tuple[float, float]] = {n["id"]: (n["lat"], n["lon"]) for n in area["nodes"]}
         self.roads: dict[str, Road] = {
@@ -177,15 +183,29 @@ class RoadNetwork:
             if road.name != "Unnamed road":
                 self.streets.setdefault(road.name, []).append(road.id)
 
+        # Roads with a past flood record (data/history.json): road id -> label shown to users.
+        self.history_roads: dict[str, str] = {}
+        for place in (history or {}).get("flood_prone", []):
+            for road_id in self.streets.get(place["road"], []):
+                self.history_roads[road_id] = place["label"]
+
     @classmethod
-    def load(cls, area_file: Path, sensors_file: Path | None = None, shelters_file: Path | None = None) -> RoadNetwork:
+    def load(
+        cls,
+        area_file: Path,
+        sensors_file: Path | None = None,
+        shelters_file: Path | None = None,
+        history_file: Path | None = None,
+    ) -> RoadNetwork:
         area = json.loads(Path(area_file).read_text(encoding="utf-8"))
-        sensors, shelter_info = [], {}
+        sensors, shelter_info, history = [], {}, None
         if sensors_file and Path(sensors_file).exists():
             sensors = json.loads(Path(sensors_file).read_text(encoding="utf-8"))["sensors"]
         if shelters_file and Path(shelters_file).exists():
             shelter_info = json.loads(Path(shelters_file).read_text(encoding="utf-8"))["shelters"]
-        return cls(area, sensors, shelter_info)
+        if history_file and Path(history_file).exists():
+            history = json.loads(Path(history_file).read_text(encoding="utf-8"))
+        return cls(area, sensors, shelter_info, history)
 
     def nearest_node(self, lat: float, lon: float) -> tuple[int, float] | None:
         """The closest junction to a point and how far away it is, or None if outside the area."""

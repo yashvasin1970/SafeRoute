@@ -35,7 +35,6 @@ ROADS = [
     ("r34", 3, 4, "South Street", "residential"),
     ("r45", 4, 5, "South Street", "residential"),
 ]
-PASSCODE = "24681357"
 SENSOR_KEY = "test-device-key"
 SMS_KEY = "test-sms-key"
 
@@ -81,7 +80,6 @@ def app(tmp_path):
         {
             "TESTING": True,
             "SECRET_KEY": "test-secret",
-            "RESPONDER_PASSCODE": PASSCODE,
             "SENSOR_KEY": SENSOR_KEY,
             "SMS_KEY": SMS_KEY,
             "STORY_STEP_SECONDS": 0,
@@ -102,6 +100,6 @@ def client(app):
 @pytest.fixture
 def responder(client):
     """A signed-in responder client. Returns (client, headers with the CSRF token)."""
-    response = client.post("/api/responder/login", json={"name": "NDRF Team 4", "passcode": PASSCODE})
+    response = client.post("/api/responder/login", json={"name": "NDRF Team 4"})
     assert response.status_code == 200
     return client, {"X-CSRF-Token": response.json["csrf"]}

@@ -1,0 +1,28 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.saferoute.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.saferoute.app'
+        // Android 6.0 (API 23) and newer, which covers the VIVO Y55S (Android 6.0.1).
+        minSdk 23
+        targetSdk 34
+        versionCode 2
+        versionName '1.1'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

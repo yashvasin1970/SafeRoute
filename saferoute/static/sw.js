@@ -9,13 +9,13 @@
  *   offline you get the last copy this device received. Libraries and icons are cache-first.
  * - Changes (POST/DELETE), routing requests and map tiles are never cached.
  */
-const CACHE = "saferoute-v2";
+const CACHE = "saferoute-v5";
 const SHELL = [
   "/",
   "/static/app.js",
   "/static/app.css",
   "/static/i18n.js",
-  "/static/icon.svg",
+  "/static/brand/mark-96.png",
   "/static/vendor/leaflet/leaflet.js",
   "/static/vendor/leaflet/leaflet.css",
   "/static/icons/icon-192.png",

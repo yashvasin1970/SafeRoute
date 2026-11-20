@@ -12,6 +12,8 @@ Where risk comes from:
   spot until a responder verifies or dismisses them.
 * **Heavy rain** from the weather feed: every sensor's low-lying stretch, +0.5, because those
   are the places that flood first.
+* **Past flooding** (data/history.json, from past cyclones and floods): roads that flooded
+  before, +0.5. A small caution only; it never closes a road.
 
 Risk is capped at 4, so a risky road costs at most five times its normal travel time.
 Each reason is kept in a structured form so the app can explain it in any language.
@@ -28,6 +30,7 @@ from .network import RoadNetwork
 RISING = 1.0
 REPORTED = 1.5
 HEAVY_RAIN = 0.5
+HISTORY = 0.5
 MAX_RISK = 4.0
 REPORT_RADIUS_M = 60
 HEAVY_RAIN_LEVELS = frozenset({"heavy", "extreme"})
@@ -36,8 +39,8 @@ REPORT_KINDS_THAT_AFFECT_ROUTES = frozenset({"flooding", "blocked"})
 
 @dataclass(frozen=True)
 class Reason:
-    type: str  # "rising", "report" or "rain"
-    place: str  # a sensor's area label, or the report kind
+    type: str  # "rising", "report", "rain" or "history"
+    place: str  # a sensor's area label, a past-flood place, or the report kind
     value: float | None = None  # water depth for "rising"
 
     def as_dict(self) -> dict:
@@ -56,8 +59,12 @@ def road_risk(
     reports: Iterable[Mapping],
     rain_level: str | None,
     closed: Iterable[str] = (),
+    history: Mapping[str, str] | None = None,
 ) -> dict[str, Risk]:
-    """Risk for every open road that has any. Roads with no risk are left out."""
+    """Risk for every open road that has any. Roads with no risk are left out.
+
+    ``history`` maps road id -> the place label of a past flood (``RoadNetwork.history_roads``).
+    """
     closed = frozenset(closed)
     totals: dict[str, float] = {}
     reasons: dict[str, list[Reason]] = {}
@@ -78,6 +85,9 @@ def road_risk(
         if rain_level in HEAVY_RAIN_LEVELS:
             for road_id in sensor.roads:
                 add(road_id, HEAVY_RAIN, Reason("rain", sensor.label))
+
+    for road_id, label in (history or {}).items():
+        add(road_id, HISTORY, Reason("history", label))
 
     for report in reports:
         if report.get("status", "open") != "open" or report["kind"] not in REPORT_KINDS_THAT_AFFECT_ROUTES:

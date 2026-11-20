@@ -1,0 +1,32 @@
+{
+  "note": "Past flood events from news reports, for reference. Roads listed under flood_prone get a small routing caution (+0.5). This is not a closure and does not replace live sensors or responder reports.",
+  "events": [
+    {
+      "id": "chennai-2015-floods",
+      "name": "Chennai floods, November-December 2015",
+      "date": "2015-12",
+      "summary": "Heavy rain flooded much of south Chennai. Velachery flooded more than older parts of the city; when outlets from the Velachery and Adambakkam lakes to the Pallikaranai marsh were blocked, water came back into the streets.",
+      "sources": [
+        "https://www.thenewsminute.com/article/did-chennai-learn-any-lessons-2015-floods-70597",
+        "https://www.thenewsminute.com/amp/story/tamil-nadu/why-chennai-s-velachery-floods-more-recovers-faster-mylapore-70547"
+      ]
+    },
+    {
+      "id": "cyclone-michaung-2023",
+      "name": "Cyclone Michaung, December 2023",
+      "date": "2023-12",
+      "summary": "Velachery Main Road was heavily flooded. Parts of Velachery, Madipakkam, Adyar and Pallikaranai stayed inundated for days after the rain stopped, and drainage gaps were blamed.",
+      "sources": [
+        "https://citizenmatters.in/devastation-storm-chennai-cyclone-michaung-monsoon-flooding-36477",
+        "https://swarajyamag.com/amp/story/tamil-nadu/if-water-is-going-to-the-sea-and-the-sea-is-not-receiving-it-what-can-we-do-velachery-mla-aassan-maulaana-on-waterlogging-after-cyclone-michaung"
+      ]
+    }
+  ],
+  "flood_prone": [
+    {
+      "road": "Velachery Main Road",
+      "label": "Velachery Main Road",
+      "events": ["chennai-2015-floods", "cyclone-michaung-2023"]
+    }
+  ]
+}

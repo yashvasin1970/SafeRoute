@@ -315,7 +315,7 @@ def test_the_flood_story_drives_the_real_system(tmp_path):
     remaining = db.closures().values()
     assert not any(c.source.startswith("sensor:") for c in remaining)  # water receded: sensors reopened
     assert any("verified report" in c.reason for c in remaining)  # the verified report stays closed
-    assert db.occupancy()["s1"] == 150  # Akshaya full
+    assert db.occupancy()["s1"] == 150  # D.M.V full
     kinds = {(r["kind"], r["status"]) for r in db.reports(None)}
     assert ("flooding", "verified") in kinds and ("rescue", "open") in kinds
     assert db.feed("weather_drill") is None  # the drill ends with the story

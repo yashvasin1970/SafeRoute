@@ -98,9 +98,9 @@ STEPS = (
         (("verify", "ram_nagar"), ("sensor", "FS-01", 31)),
     ),
     Step(
-        "19:10 · Akshaya is now full. It stays on the map but is no longer suggested to anyone.",
-        "19:10 · Akshaya நிரம்பிவிட்டது. அது வரைபடத்தில் தெரியும், ஆனால் இனி யாருக்கும் பரிந்துரைக்கப்படாது.",
-        "19:10 · Akshaya अब भर गया है। यह नक्शे पर दिखता है, पर अब किसी को सुझाया नहीं जाता।",
+        "19:10 · D.M.V is now full. It stays on the map but is no longer suggested to anyone.",
+        "19:10 · D.M.V நிரம்பிவிட்டது. அது வரைபடத்தில் தெரியும், ஆனால் இனி யாருக்கும் பரிந்துரைக்கப்படாது.",
+        "19:10 · D.M.V अब भर गया है। यह नक्शे पर दिखता है, पर अब किसी को सुझाया नहीं जाता।",
         (("occupancy", "s1", 150),),
     ),
     Step(
@@ -138,6 +138,20 @@ FLOOD_SCENARIO = (
     ("report", "ram_nagar", "flooding", 12.97305, 80.21650, "Water entering houses, knee deep", "app"),
     ("report", "rescue", "rescue", 12.98045, 80.21840, "Elderly couple, ground floor flooded", "sms"),
 )
+
+# Single known cases for testing routes, closures and alerts. Each one resets the demo, then sets
+# up one situation. Like the flood scenario, they run through the normal code paths.
+PRESETS = {
+    "calm": (),
+    "rain": (("weather", 40, 12), ("sensor", "FS-02", 18)),
+    "closure": (("weather", 40, 12), ("sensor", "FS-01", 34)),
+    "shelter_full": (("occupancy", "s1", 150),),
+    "rescue": (("report", "rescue", "rescue", 12.98045, 80.21840, "Elderly couple, ground floor flooded", "sms"),),
+    "rescue_group": (
+        ("report", "rescue", "rescue", 12.98045, 80.21840, "Family of 4 on first floor, one elderly person", "sms", 4),
+    ),
+    "all_blocked": (("close_all",),),
+}
 
 
 class StoryRunner:
@@ -186,6 +200,29 @@ class StoryRunner:
         if self.on_change:
             self.on_change()
 
+    def preset_ids(self) -> list[str]:
+        return list(PRESETS)
+
+    def preset(self, preset_id: str, actor: str) -> bool:
+        """Load one test case (resets the demo first). Returns False for an unknown case."""
+        if preset_id not in PRESETS:
+            return False
+        self.stop()
+        self.store.reset(actor)
+        self._ids = {}
+        for action in PRESETS[preset_id]:
+            self._apply(action)
+        self.store.set_feed(
+            "scenario",
+            {"name": preset_id},
+            actor=actor,
+            action="scenario",
+            detail=f"test case loaded: {preset_id}",
+        )
+        if self.on_change:
+            self.on_change()
+        return True
+
     def flood_roads(self) -> list[str]:
         """The roads the flood scenario closes, for the planner to test without publishing."""
         return sorted(
@@ -228,14 +265,17 @@ class StoryRunner:
         elif kind == "sensor" and action[1] in self.network.sensors:
             sensor = self.network.sensors[action[1]]
             self.store.record_reading(sensor.id, sensor.roads, float(action[2]), sensor.label)
+        elif kind == "close_all":
+            self.store.close_many(sorted(self.network.roads), "Flooded", RESPONDER, "every road blocked (test case)")
         elif kind == "occupancy" and action[1] in self.network.shelters:
             shelter = self.network.shelters[action[1]]
             self.store.set_occupancy(shelter.id, action[2], RESPONDER, shelter.name, shelter.capacity)
         elif kind == "arrivals" and action[1] in self.network.shelters:
             self.store.add_arrival(action[1], action[2], f"story-{action[1]}", minutes=60, max_active=99)
         elif kind == "report":
-            _, key, report_kind, lat, lon, note, source = action
-            report = make_report(self.network, report_kind, lat, lon, note, source, "story")
+            _, key, report_kind, lat, lon, note, source, *rest = action
+            people = rest[0] if rest else 1
+            report = make_report(self.network, report_kind, lat, lon, note, source, "story", people)
             if report:
                 self._ids[key] = self.store.add_report(report, "SMS" if source == "sms" else "Resident")
         elif kind == "verify":

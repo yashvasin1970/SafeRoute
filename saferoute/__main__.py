@@ -15,8 +15,8 @@ def main() -> None:
 
     app = create_app()
     print(f"\n  SafeRoute is running at http://{args.host}:{args.port}")
-    print(f"  Responder passcode: {app.config['RESPONDER_PASSCODE']}")
-    print("  (set SAFEROUTE_RESPONDER_PASSCODE to choose your own)\n")
+    print("  Responders sign in with just a name — no passcode.")
+    print("  (set SAFEROUTE_RESPONDER_ID to limit sign-in to one name or unit)\n")
     app.run(host=args.host, port=args.port, threaded=True)
 
 

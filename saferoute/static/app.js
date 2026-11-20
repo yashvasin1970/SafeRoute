@@ -176,6 +176,7 @@
   function reasonText(reason) {
     if (reason.type === "rising") return t("reason.rising", { place: reason.place, value: Math.round(reason.value) });
     if (reason.type === "report") return t("reason.report", { kind: t(`kind.${reason.place}`) });
+    if (reason.type === "history") return t("reason.history", { place: reason.place });
     return t("reason.rain", { place: reason.place });
   }
 
@@ -189,16 +190,53 @@
   let renderer;
   const layers = {};
 
+  // Surroundings option: 60 km in every direction from the middle of the mapped area.
+  const WIDE_RADIUS_M = 60000;
+  let localBounds = null;
+  let wideArea = false;
+
+  function setWideArea(on) {
+    wideArea = on;
+    const [lat, lon] = state.area.area.center;
+    const bounds = on ? L.latLng(lat, lon).toBounds(WIDE_RADIUS_M * 2) : localBounds;
+    map.setMaxBounds(bounds);
+    map.fitBounds(bounds, { padding: [16, 16] });
+  }
+
+  function wireWideArea() {
+    const control = L.control({ position: "topright" });
+    control.onAdd = () => {
+      const button = L.DomUtil.create("button", "leaflet-bar wide-area-btn");
+      button.type = "button";
+      button.setAttribute("aria-pressed", "false");
+      button.textContent = t("map.wide");
+      L.DomEvent.disableClickPropagation(button);
+      button.addEventListener("click", () => {
+        setWideArea(!wideArea);
+        button.setAttribute("aria-pressed", String(wideArea));
+        button.textContent = t(wideArea ? "map.wide_off" : "map.wide");
+      });
+      return button;
+    };
+    control.addTo(map);
+  }
+
   function initMap() {
     const [lat, lon] = state.area.area.center;
-    map = L.map("map", { zoomControl: true, preferCanvas: true, minZoom: 13, zoomSnap: 0.5 }).setView([lat, lon], 15);
-    // The basemap is optional: roads, closures and routes are drawn from local data.
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    map = L.map("map", { zoomControl: true, preferCanvas: true, minZoom: 9, zoomSnap: 0.5 }).setView([lat, lon], 15);
+    // The basemaps are optional: roads, closures and routes are drawn from local data.
+    const streets = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       className: "basemap",
       referrerPolicy: "strict-origin-when-cross-origin",
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(map);
+    const satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19,
+      referrerPolicy: "strict-origin-when-cross-origin",
+      attribution: "Tiles &copy; Esri &mdash; Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    });
+    L.control.layers({ [t("map.streets")]: streets, [t("map.satellite")]: satellite }, null, { position: "topright" }).addTo(map);
 
     renderer = L.canvas({ tolerance: 8 });
     for (const name of ["zones", "roads", "route", "marks", "start", "reports", "shelters", "sensors"]) {
@@ -212,7 +250,9 @@
       road.line.addTo(layers.roads);
       bounds.extend(road.line.getBounds());
     }
-    map.setMaxBounds(bounds.pad(0.6));
+    localBounds = bounds.pad(0.6);
+    map.setMaxBounds(localBounds);
+    wireWideArea();
     let fitted = false;
     new ResizeObserver(() => {
       map.invalidateSize();
@@ -335,9 +375,26 @@
   function drawReports() {
     layers.reports.clearLayers();
     for (const report of state.live.reports) {
+      // Rescue requests are for responders only: residents never see other people's locations.
+      if (report.kind === "rescue" && !state.session.responder) continue;
       const cls = report.kind === "rescue" ? "mk-report is-rescue" : "mk-report";
       const icon = L.divIcon({ className: "mk-wrap", html: `<div class="${cls}">!</div>`, iconSize: [24, 24], iconAnchor: [12, 12] });
       const marker = L.marker([report.lat, report.lon], { icon, title: t(`kind.${report.kind}`), zIndexOffset: 300 });
+      if (report.kind === "rescue") {
+        marker.on("click", (event) => {
+          const bubble = el(
+            "div",
+            { class: "bubble" },
+            el("div", { class: "bubble-row" }, el("b", { text: t("rescue.location") }), el("span", { text: ` ${report.place}` })),
+            el("div", { class: "bubble-row" }, el("b", { text: t("rescue.people") }), el("span", { text: ` ${report.people ?? 1}` })),
+            report.note ? el("div", { class: "popup-note", text: report.note }) : null,
+            reportActions(report),
+          );
+          popup(event.latlng, bubble);
+        });
+        marker.addTo(layers.reports);
+        continue;
+      }
       marker.on("click", (event) => {
         const lines = [el("div", { class: "popup-title", text: `#${report.id} · ${t(`kind.${report.kind}`)}` }), el("div", { class: "popup-sub", text: t("report.popup", { kind: t(`kind.${report.kind}`), place: report.place, time: fmtTime(report.at) }) })];
         if (report.note) lines.push(el("div", { class: "popup-note", text: report.note }));
@@ -414,6 +471,31 @@
   }
 
   // ---- residents: routing ------------------------------------------------------------------
+
+  // The nearest point on any mapped road, for a GPS fix that is outside the mapped area.
+  function nearestMappedPoint(lat, lon) {
+    let best = null;
+    for (const road of state.roads.values()) {
+      if (road.name === "Unnamed road") continue; // prefer a street people can name
+      for (const [plat, plon] of road.geometry) {
+        const d = distanceM([lat, lon], [plat, plon]);
+        if (!best || d < best.d) best = { d, lat: plat, lon: plon, road };
+      }
+    }
+    return best;
+  }
+
+  // Start from the device's location. If no mapped road is close (e.g. St. Joseph's, outside the
+  // map), snap to the nearest mapped road and say so, so the route still works.
+  function setStartFromGps(lat, lon) {
+    const near = nearestMappedPoint(lat, lon);
+    if (near && near.d > 100) {
+      setStart({ lat: near.lat, lng: near.lon });
+      showBanner(t("locate.snapped", { street: street(near.road.name) }));
+      return;
+    }
+    setStart(L.latLng(lat, lon));
+  }
 
   function setStart(latlng) {
     state.route.start = { lat: latlng.lat, lon: latlng.lng };
@@ -535,7 +617,8 @@
     const from = (params.get("from") || "").split(",").map(Number);
     if (from.length !== 2 || from.some((n) => !Number.isFinite(n))) return;
     if (["foot", "vehicle"].includes(params.get("mode"))) state.route.mode = params.get("mode");
-    if (["safest", "fastest"].includes(params.get("prefer"))) state.route.prefer = params.get("prefer");
+    // "Fastest" is no longer offered; old links fall back to the safest route.
+    if (params.get("prefer") === "safest") state.route.prefer = "safest";
     for (const [group, value] of [["mode", state.route.mode], ["prefer", state.route.prefer]]) {
       for (const button of $$(`[data-group="${group}"] [role=radio]`)) button.setAttribute("aria-checked", String(button.dataset.value === value));
     }
@@ -619,14 +702,30 @@
     }
   }
 
+  // "I'm trapped": show the number to call, then route to the nearest open shelter from here.
+  // Uses the spot already chosen, or the device's location if none is set.
   function trapped() {
-    if (!state.route.start) {
-      toast(t("trapped.need_spot"));
+    $("#sos").hidden = false;
+    if (state.route.start) {
+      requestRoute({ fit: true });
+      startRescue();
       return;
     }
+    if (!navigator.geolocation) return toast(t("trapped.need_spot"));
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setStartFromGps(position.coords.latitude, position.coords.longitude); // routes via setStart
+        startRescue();
+      },
+      () => toast(t("trapped.need_spot")),
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  }
+
+  function startRescue() {
     $("#report-drawer").open = true;
     sendReport("rescue");
-    $("#report-drawer").scrollIntoView({ block: "center", behavior: "smooth" });
+    $("#sos").scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
   // ---- accessibility -----------------------------------------------------------------------
@@ -638,10 +737,20 @@
     map?.invalidateSize();
   }
 
+  // "I'm trapped" reads CALL RESCUE when no open shelter can be reached from the spot.
+  function renderTrapped() {
+    const stuck = Boolean(state.route.result && !state.route.result.route);
+    $("#trapped").textContent = t(stuck ? "trapped.rescue" : "trapped.button");
+    $("#sos .sos-title").textContent = t(stuck ? "sos.rescue_title" : "sos.title");
+    $("#sos .btn-sos").textContent = t(stuck ? "sos.rescue_call" : "sos.call");
+    if (stuck) $("#sos").hidden = false;
+  }
+
   function renderRouteResult() {
     const box = $("#route-result");
     box.replaceChildren();
     const result = state.route.result;
+    renderTrapped();
     if (state.route.error && !result) {
       box.append(el("div", { class: "empty" }, el("strong", { text: t("route.error_title") }), el("span", { text: state.route.error })));
       return;
@@ -888,7 +997,8 @@
       return;
     }
     try {
-      const data = await api("/api/reports", { body: { ...state.route.start, kind, note: $("#report-note").value } });
+      const people = kind === "rescue" ? Math.min(20, Math.max(1, Math.round(Number($("#rescue-people").value)) || 1)) : 1;
+      const data = await api("/api/reports", { body: { ...state.route.start, kind, note: $("#report-note").value, people } });
       message.textContent = t(kind === "rescue" ? "report.sent_rescue" : "report.sent", { id: data.id, place: data.place });
       $("#report-note").value = "";
       syncNow();
@@ -976,11 +1086,9 @@
     }
     const tile = (big, label, sub) => el("div", { class: "tile" }, el("b", { text: String(big) }), el("span", { text: label }), sub ? el("span", { class: "small muted", text: sub }) : null);
     $("#stats-grid").replaceChildren(
-      tile(numbers.subscribers.total, t("stats.subscribers"), numbers.subscribers.pending ? t("stats.pending", { n: numbers.subscribers.pending }) : null),
       tile(numbers.safe.total, t("stats.safe"), t("stats.safe_hour", { n: numbers.safe.last_hour })),
       tile(numbers.reports.open, t("stats.reports"), t("stats.rescue", { n: numbers.reports.rescue })),
       tile(numbers.en_route, t("stats.en_route")),
-      tile(numbers.sms.total, t("stats.sms"), t("stats.alerts", { n: numbers.sms.alerts })),
     );
     const rows = Object.entries(numbers.subscribers.by_shelter).map(([id, n]) => el("li", {}, el("span", { class: "grow", text: state.shelters.get(id)?.name || id }), el("b", { text: String(n) })));
     if (numbers.subscribers.no_route) rows.push(el("li", {}, el("span", { class: "grow", text: t("stats.no_route") }), el("b", { text: String(numbers.subscribers.no_route) })));
@@ -991,12 +1099,14 @@
   function renderReportList() {
     const list = $("#report-list");
     list.replaceChildren();
-    $("#report-count").textContent = String(state.live.reports.length);
-    if (!state.live.reports.length) {
+    // Responders see only the people who pressed "I'm trapped / need help" (rescue reports).
+    const needHelp = state.live.reports.filter((report) => report.kind === "rescue");
+    $("#report-count").textContent = String(needHelp.length);
+    if (!needHelp.length) {
       list.append(el("li", { class: "list-empty", text: t("resp.no_reports") }));
       return;
     }
-    for (const report of state.live.reports) {
+    for (const report of needHelp) {
       list.append(
         el(
           "li",
@@ -1143,6 +1253,21 @@
     const total = state.shelters.size;
     const open = [...state.shelters.keys()].filter((id) => shelterLive(id).status === "open").length;
     $("#live-text").textContent = t("live.summary", { blocked: state.live.closures.size, open, total });
+    renderAlertLevel();
+  }
+
+  // Emergency level chip on the map: driven by how many roads are blocked right now.
+  // The "I'm trapped" button only appears when every road on the map is blocked.
+  function renderAlertLevel() {
+    const blocked = state.live.closures.size;
+    const allBlocked = state.roads.size > 0 && blocked >= state.roads.size;
+    const trappedWrap = $("#trapped-wrap");
+    if (trappedWrap) trappedWrap.hidden = !allBlocked;
+    const level = blocked >= 5 ? "red" : blocked >= 1 ? "high" : "normal";
+    const chip = $("#alert-chip");
+    if (!chip) return;
+    chip.className = `alert-chip is-${level}`;
+    $("#alert-text").textContent = t(`alert.${level}`);
   }
 
   function renderWeather() {
@@ -1358,7 +1483,7 @@
     $("#locate").addEventListener("click", () => {
       if (!navigator.geolocation) return toast(t("route.empty_text"));
       navigator.geolocation.getCurrentPosition(
-        (position) => setStart(L.latLng(position.coords.latitude, position.coords.longitude)),
+        (position) => setStartFromGps(position.coords.latitude, position.coords.longitude),
         () => toast(t("route.empty_text")),
         { enableHighAccuracy: true, timeout: 10000 },
       );
@@ -1389,7 +1514,7 @@
       const error = $("#login-error");
       error.hidden = true;
       try {
-        const data = await api("/api/responder/login", { body: { name: $("#login-name").value, passcode: $("#login-passcode")?.value || "" } });
+        const data = await api("/api/responder/login", { body: { name: $("#login-name").value } });
         state.session.responder = data.responder;
         state.session.csrf = data.csrf;
         $("#login-name").value = "";
@@ -1450,6 +1575,39 @@
       state.storyHiddenAt = null;
       responderAction(api("/api/scenario/flood", { body: {}, csrf: true }), t("scenario.done"));
     });
+    api("/api/scenario/presets")
+      .then((data) => {
+        const list = $("#preset-list");
+        for (const id of data.presets) {
+          list.append(
+            el("button", {
+              type: "button",
+              class: "btn btn-quiet btn-small",
+              text: t(`preset.${id}`),
+              title: t(`preset.${id}.lead`),
+              onclick: () => {
+                state.storyHiddenAt = null;
+                responderAction(api(`/api/scenario/preset/${id}`, { body: {}, csrf: true }), t("preset.done", { name: t(`preset.${id}`) }));
+              },
+            }),
+          );
+        }
+      })
+      .catch(() => {});
+    // Client-side test case: route from St. Joseph's College (Semmancheri), which lies outside the
+    // mapped area, so the app should explain that it can't route from there.
+    $("#preset-list").append(
+      el("button", {
+        type: "button",
+        class: "btn btn-quiet btn-small",
+        text: t("preset.outside"),
+        title: t("preset.outside.lead"),
+        onclick: () => {
+          selectTab("route", true);
+          setStart({ lat: 12.9106, lng: 80.227 });
+        },
+      }),
+    );
     $("#plan-flood").addEventListener("click", async () => {
       try {
         const data = await api("/api/scenario/flood/roads");

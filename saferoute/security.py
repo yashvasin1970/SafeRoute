@@ -23,8 +23,8 @@ ENV_OVERRIDES = {
     "sensor_key": "SAFEROUTE_SENSOR_KEY",
     "sms_key": "SAFEROUTE_SMS_KEY",
 }
-# The responder passcode is NOT generated: responders sign in with just a name by default. Set
-# SAFEROUTE_RESPONDER_PASSCODE to require a passcode (e.g. in production).
+# There is no responder passcode: responders sign in with a name alone. Only the session secret and
+# the sensor/SMS device keys are generated here.
 
 
 def load_secrets(instance: Path) -> dict[str, str]:
@@ -113,7 +113,7 @@ CSP = "; ".join(
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self'",
-        "img-src 'self' data: https://tile.openstreetmap.org",
+        "img-src 'self' data: https://tile.openstreetmap.org https://server.arcgisonline.com",
         "connect-src 'self'",
         "font-src 'self'",
         "object-src 'none'",

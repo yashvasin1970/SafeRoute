@@ -11,3 +11,11 @@ data/raw/
 *.db-shm
 tools/
 docs/deck-src/
+# Build outputs and downloads
+cache/
+dist/
+SafeRoute.apk
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties

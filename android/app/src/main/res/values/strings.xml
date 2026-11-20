@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SafeRoute</string>
+
+    <!--
+        The SafeRoute server the app opens. Change this when the server address changes
+        (for example, a new public tunnel link). Keep the https:// and no trailing slash.
+    -->
+    <string name="saferoute_url">https://versions-holidays-lowest-without.trycloudflare.com/</string>
+
+    <string name="offline_title">SafeRoute cannot reach the server</string>
+    <string name="offline_text">Check your mobile data or Wi-Fi, then try again. In an emergency, call 100.</string>
+    <string name="try_again">Try again</string>
+    <string name="link_title">Cannot reach SafeRoute</string>
+    <string name="link_text">Check your internet. If the server link has changed, paste the new link and tap Open.</string>
+    <string name="link_open">Open</string>
+    <string name="link_invalid">That does not look like a link. Paste the full SafeRoute link.</string>
+</resources>

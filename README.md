@@ -45,8 +45,8 @@ The working model runs on real OpenStreetMap roads for **Velachery, Chennai** (9
 - If no open shelter can be reached, it says so plainly and gives safety advice and the 100 number.
 
 ### Responders: *Responders*
-- Sign in with just your name or unit — the sign-in screen gates the responder tools. A passcode is
-  optional (off by default; set `SAFEROUTE_RESPONDER_PASSCODE` to require one). Only signed-in responders change the map.
+- Sign in with just your name or unit — the sign-in screen gates the responder tools, and there is
+  no passcode. (A deployment can limit sign-in to one name or unit with `SAFEROUTE_RESPONDER_ID`.) Only signed-in responders change the map.
 - Block and reopen roads; mark shelters open, full or closed and set **how many people are inside**.
 - See resident reports (rescue requests and notes are visible to responders only), and **verify**
   them (which closes the road) or **dismiss** them.
@@ -158,14 +158,13 @@ python3 -m venv .venv
 .venv/bin/python -m saferoute
 ```
 
-Open <http://127.0.0.1:5050>. On first run SafeRoute generates a random responder passcode, sensor
-device key, SMS gateway key and session secret, keeps them in `instance/secrets.json`, and prints the
-passcode. To set your own, copy `.env.example` to `.env`:
+Open <http://127.0.0.1:5050>. Responders sign in with a name alone — there is no passcode. On first
+run SafeRoute generates a random sensor device key, SMS gateway key and session secret and keeps them
+in `instance/secrets.json`. To set your own, copy `.env.example` to `.env`:
 
 | Variable | Purpose |
 |---|---|
-| `SAFEROUTE_RESPONDER_ID` | Optional: require this responder ID at sign-in (otherwise any name or unit works) |
-| `SAFEROUTE_RESPONDER_PASSCODE` | Optional: require this passcode at sign-in (off by default — a name alone signs in) |
+| `SAFEROUTE_RESPONDER_ID` | Optional: limit sign-in to this one name or unit (otherwise any name or unit works) |
 | `SAFEROUTE_SENSOR_KEY` | Device key flood sensors send |
 | `SAFEROUTE_SMS_KEY` | Key an SMS gateway sends to `/api/sms/inbound` |
 | `SAFEROUTE_SECRET_KEY` | Signs session cookies |
@@ -221,12 +220,14 @@ hackathons), and warm the hosted link a minute before you start, since the free 
 | POST | `/api/subscriptions` / `/verify` | anyone | Web SMS sign-up: send a code to a number, then confirm it |
 | POST | `/api/sms/simulate` | anyone | `{text, phone?}` → the SMS reply (rate-limited) |
 | GET | `/api/sms/inbox?phone=` | anyone | Messages SafeRoute sent the in-app demo phone (demo numbers only) |
-| POST | `/api/responder/login` / `logout` | responders | `{name, passcode}` |
+| POST | `/api/responder/login` / `logout` | responders | `{name}` |
 | POST / DELETE | `/api/closures`, `/api/closures/<road>` | responders | Block / reopen a road |
 | POST | `/api/shelters/<id>` | responders | `{status}` and/or `{occupancy}` |
 | POST | `/api/reports/<id>/verify` or `/dismiss` | responders | Verify (closes the road) or dismiss a report |
 | GET | `/api/stats`, `/api/events.csv` | responders | At-a-glance numbers; the full activity log as CSV |
 | POST | `/api/scenario/flood` | responders | Load the one-click heavy-flood scenario |
+| GET | `/api/scenario/presets` | anyone | The named test cases (calm, rain, closure, shelter_full, rescue, all_blocked) |
+| POST | `/api/scenario/preset/<id>` | responders | Reset, then set up one test case |
 | POST | `/api/story/start` or `/stop` | responders | Play or stop the flood story |
 | POST | `/api/reset` | responders | Clear closures, reports, readings and shelter counts |
 | POST | `/api/sensors/<id>/readings` | devices | `{level_cm}` with `X-Device-Key` |
@@ -234,12 +235,12 @@ hackathons), and warm the hosted link a minute before you start, since the free 
 
 ## Security
 
-- **Only authorised responders change the map** (the proposal's answer to false reports). ID and
-  any configured passcode/ID is compared in constant time; 5 wrong attempts per 5 minutes per address, then a lock-out. (The demo is passwordless by default; set a passcode for a real deployment.)
+- **Only authorised responders change the map** (the proposal's answer to false reports). Responders
+  sign in with a name alone — there is no passcode. A deployment may restrict sign-in to one name or unit (`SAFEROUTE_RESPONDER_ID`), compared in constant time; 5 wrong attempts per 5 minutes per address, then a lock-out.
 - **Resident reports never close roads** on their own; rescue requests and all notes are shown to
   responders only. Reports, arrivals and SMS are rate-limited per (hashed) address.
 - **CSRF protection** on every responder change; `HttpOnly`, `SameSite` and (hosted) `Secure` cookies.
-- **Sensors and SMS gateways use their own keys**, separate from the responder passcode.
+- **Sensors and SMS gateways use their own device keys**, separate from responder sign-in.
 - **No secrets in the code.** Generated on first run, or set by environment variables or the host.
 - **Strict Content Security Policy** (no inline or third-party scripts), `X-Frame-Options: DENY`,
   `nosniff`, `no-referrer`, HSTS on HTTPS. Leaflet is bundled and checked against its official hashes.

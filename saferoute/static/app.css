@@ -324,6 +324,7 @@ button, input, select { font: inherit; color: inherit; }
 .drawer { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; background: #fff; }
 .drawer summary { cursor: pointer; font-weight: 600; font-size: 14px; }
 .drawer[open] summary { margin-bottom: 6px; }
+.drawer[hidden] { display: none; }
 .report-kinds { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .report-msg { margin: 0; font-size: 13px; color: var(--ink-2); background: var(--soft); padding: 8px 10px; border-radius: 8px; }
 .phone { border: 1px solid #cbd5e1; border-radius: 16px; padding: 10px; background: #f8fafc; }
@@ -389,6 +390,39 @@ body.a11y :focus-visible { outline-width: 4px; }
 body.a11y .legend { font-size: 14px; }
 body.a11y .basemap { opacity: 0.6; }
 
+/* Map layer switch (Streets / Satellite): the bundled Leaflet icon isn't shipped, so label it. */
+.leaflet-control-layers-toggle { background-image: none !important; width: auto !important; height: 30px !important; padding: 0 10px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
+.leaflet-control-layers-toggle::after { content: "Layers"; font: 600 13px/1 system-ui, Arial, sans-serif; color: #0f172a; }
+.leaflet-control-layers-expanded { padding: 8px 10px; font: 14px/1.4 system-ui, Arial, sans-serif; }
+
+/* "I'm trapped": emergency number card. */
+.sos { margin: 10px 0 0; padding: 12px; border-radius: 12px; background: var(--closed-soft); border: 1px solid #fecaca; color: #7f1d1d; }
+.sos[hidden] { display: none; }
+.sos-title { margin: 0 0 8px; font-weight: 700; }
+.sos .small { margin: 8px 0 0; color: #7f1d1d; }
+.btn-sos {
+  display: block; text-align: center; background: var(--closed); color: #fff; font-size: 20px; font-weight: 800;
+  padding: 12px; border-radius: 10px; text-decoration: none;
+}
+
+/* Find a route: numbered steps and a clear label above the travel buttons. */
+.steps { margin: 6px 0 14px; padding-left: 22px; font-size: 14px; line-height: 1.55; color: var(--ink-2); }
+.steps li { margin-bottom: 2px; }
+.field-label { margin: 4px 0 6px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+
+/* While the flood-story banner is up, move the map's top-right controls below it. */
+body:has(.story:not([hidden])) .leaflet-top.leaflet-right { top: 124px; }
+
+/* Responder test cases: one button per preset. */
+.preset-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* Map: 60 km surroundings button (sits in the Leaflet control stack). */
+.wide-area-btn {
+  background: #fff; color: var(--ink); border: 0; padding: 6px 10px; cursor: pointer;
+  font: 600 13px/1.2 system-ui, Arial, sans-serif; border-radius: 4px;
+}
+.wide-area-btn[aria-pressed="true"] { background: var(--route); color: #fff; }
+
 /* ==== v4: responder sign-in screen (modal) ==== */
 body.modal-open { overflow: hidden; }
 .modal { position: fixed; inset: 0; z-index: 4000; display: grid; place-items: center; padding: 20px; }
@@ -412,3 +446,48 @@ body.modal-open { overflow: hidden; }
 .signin-card .btn-primary { margin-top: 4px; padding: 11px 14px; font-size: 16px; }
 .signin-close { margin: 12px auto 0; text-align: center; }
 body.a11y .signin-card { zoom: 1.1; }
+
+/* ---- Dashboard redesign: numbered cards and an emergency-level chip on the map ---- */
+.alert-chip {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 500;
+  display: flex; flex-direction: column; gap: 2px; min-width: 200px; padding: 8px 14px;
+  background: #fff; border-radius: 12px; border-left: 6px solid #16a34a;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18); pointer-events: none;
+}
+.alert-chip .alert-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; font-weight: 600; }
+.alert-chip strong { font-size: 15px; color: #15803d; }
+.alert-chip.is-high { border-left-color: #f59e0b; }
+.alert-chip.is-high strong { color: #b45309; }
+.alert-chip.is-red { border-left-color: #dc2626; }
+.alert-chip.is-red strong { color: #dc2626; }
+
+.dash-card {
+  background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 16px;
+  margin-bottom: 12px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+.dash-card > .card-head, details.dash-card > summary.card-head {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font-size: 16px; font-weight: 700;
+  color: #0f172a; cursor: pointer; list-style: none;
+}
+details.dash-card > summary.card-head::-webkit-details-marker { display: none; }
+.step-num {
+  flex: 0 0 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center;
+  background: #1d4ed8; color: #fff; font-size: 13px; font-weight: 700;
+}
+.dash-card .segmented { margin-top: 8px; }
+.dash-card .field-label { margin: 12px 0 4px; }
+@media (max-width: 600px) {
+  .alert-chip { top: 8px; min-width: 0; padding: 6px 10px; max-width: 58%; white-space: nowrap; }
+  .alert-chip strong { font-size: 13px; white-space: normal; }
+  .alert-chip .alert-label { font-size: 10px; }
+}
+
+/* ---- Rescue requests on the responder map: a speech bubble with location and head count ---- */
+.bubble {
+  min-width: 200px; padding: 10px 12px; border: 3px solid #0f172a; border-radius: 16px; background: #fff;
+  font-size: 14px; color: #0f172a;
+}
+.bubble-row { margin: 2px 0; }
+.bubble .btn { margin-top: 6px; }
+.rescue-people { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 10px; font-size: 14px; }
+.rescue-people input { width: 72px; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 8px; }

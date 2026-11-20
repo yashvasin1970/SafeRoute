@@ -27,6 +27,14 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_AREA = ROOT / "data" / "velachery.json"
 DEFAULT_SENSORS = ROOT / "data" / "velachery.sensors.json"
 DEFAULT_SHELTERS = ROOT / "data" / "velachery.shelters.json"
+DEFAULT_HISTORY = ROOT / "data" / "history.json"
+
+
+def _file_env(name: str, default: Path) -> Path | None:
+    """An area's data file: the env var if set (empty means none), otherwise the Velachery default."""
+    if name not in os.environ:
+        return default
+    return Path(os.environ[name]) if os.environ[name].strip() else None
 
 
 def env_flag(name: str) -> bool:
@@ -50,17 +58,18 @@ def create_app(overrides: dict | None = None) -> Flask:
     )
     app.config.update(
         SECRET_KEY=secrets_.get("secret_key"),
-        # Empty by default: responders sign in with a name only. Set the env var to require a passcode.
-        RESPONDER_PASSCODE=os.environ.get("SAFEROUTE_RESPONDER_PASSCODE", "").strip(),
+        # Responders sign in with a name alone — there is no passcode. A deployment may still limit
+        # sign-in to one name or unit with SAFEROUTE_RESPONDER_ID (unset by default: any name works).
         RESPONDER_ID=None
         if overrides.get("TESTING")
         else (os.environ.get("SAFEROUTE_RESPONDER_ID", "").strip() or None),
         SENSOR_KEY=secrets_.get("sensor_key"),
         SMS_KEY=secrets_.get("sms_key"),
-        DATABASE=instance / "saferoute.db",
-        AREA_FILE=DEFAULT_AREA,
-        SENSORS_FILE=DEFAULT_SENSORS,
-        SHELTERS_FILE=DEFAULT_SHELTERS,
+        DATABASE=Path(os.environ.get("SAFEROUTE_DATABASE") or instance / "saferoute.db"),
+        AREA_FILE=Path(os.environ.get("SAFEROUTE_AREA_FILE") or DEFAULT_AREA),
+        SENSORS_FILE=_file_env("SAFEROUTE_SENSORS_FILE", DEFAULT_SENSORS),
+        SHELTERS_FILE=_file_env("SAFEROUTE_SHELTERS_FILE", DEFAULT_SHELTERS),
+        HISTORY_FILE=DEFAULT_HISTORY,
         WEATHER_ENABLED=not overrides.get("TESTING") and not env_flag("SAFEROUTE_NO_WEATHER"),
         STORY_STEP_SECONDS=float(os.environ.get("SAFEROUTE_STORY_STEP_SECONDS", "9")),
         SMS_OUTBOUND_URL=os.environ.get("SAFEROUTE_SMS_OUTBOUND_URL") or None,
@@ -76,7 +85,13 @@ def create_app(overrides: dict | None = None) -> Flask:
     if app.config["TRUST_PROXY"]:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-    net = RoadNetwork.load(app.config["AREA_FILE"], app.config["SENSORS_FILE"], app.config["SHELTERS_FILE"])
+    net = RoadNetwork.load(
+        app.config["AREA_FILE"], app.config["SENSORS_FILE"], app.config["SHELTERS_FILE"], app.config["HISTORY_FILE"]
+    )
+    history_path = Path(app.config["HISTORY_FILE"])
+    app.extensions["saferoute.history"] = (
+        json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else {"events": []}
+    )
     db = Store(app.config["DATABASE"])
     db.init()
     lat, lon = net.meta["center"]

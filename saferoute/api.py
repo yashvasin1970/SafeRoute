@@ -130,7 +130,7 @@ def live() -> Live:
         readings=readings,
         reports=reports,
         weather=current_weather,
-        risk=road_risk(net, levels, reports, current_weather.get("level"), closures.keys()),
+        risk=road_risk(net, levels, reports, current_weather.get("level"), closures.keys(), net.history_roads),
     )
 
 
@@ -227,7 +227,7 @@ def state():
             "lon": r["lon"],
             "place": r["place"],
             "at": r["created_at"],
-            **({"note": r["note"], "source": r["source"]} if responder else {}),
+            **({"note": r["note"], "source": r["source"], "people": r["people"]} if responder else {}),
         }
         for r in now.reports
         if responder or r["kind"] != "rescue"  # rescue requests (and all notes) are for responders only
@@ -357,9 +357,12 @@ def new_report():
         return bad("lat and lon must be numbers.")
     if not isinstance(note, str) or len(note) > 200:
         return bad("note must be text of at most 200 characters.")
+    people = number(data.get("people", 1), 1, MAX_PARTY)
+    if people is None or people != int(people):
+        return bad(f"people must be a whole number from 1 to {MAX_PARTY}.")
     if not limiter("reports").allow(client()):
         return bad("Too many reports. Try again in a few minutes.", 429, "rate_limited")
-    report = make_report(network(), kind, lat, lon, note, "app", client())
+    report = make_report(network(), kind, lat, lon, note, "app", client(), int(people))
     if report is None:
         return bad("That spot is outside the mapped area.", 422, "outside_area")
     report_id = store().add_report(report, "Resident")
@@ -378,24 +381,20 @@ def who():
 def login():
     data = body()
     if data is None:
-        return bad("Send JSON with name and passcode.")
+        return bad("Send JSON with your name.")
     key = request.remote_addr or "unknown"
     if limiter("login").blocked(key):
-        return bad("Too many wrong passcodes. Wait five minutes and try again.", 429, "rate_limited")
+        return bad("Too many tries. Wait five minutes and try again.", 429, "rate_limited")
 
     name = str(data.get("name", "")).strip()
-    passcode = str(data.get("passcode", "")).strip()
     if not 2 <= len(name) <= 60:
         return bad("Enter your name or unit (2 to 60 characters).", 400, "name_needed")
-    # Responders sign in with a name only by default. A passcode and/or an ID are checked only when
-    # configured (SAFEROUTE_RESPONDER_PASSCODE / _ID); both run, and the error never says which failed.
-    required_passcode = current_app.config.get("RESPONDER_PASSCODE") or ""
+    # Responders sign in with a name alone — there is no passcode. A deployment may limit sign-in to
+    # one name or unit with SAFEROUTE_RESPONDER_ID; left unset (the default), any name is accepted.
     expected_id = current_app.config.get("RESPONDER_ID")
-    id_ok = same(name.lower(), expected_id.lower()) if expected_id else True
-    passcode_ok = (not required_passcode) or (bool(passcode) and same(passcode, required_passcode))
-    if not (id_ok and passcode_ok):
+    if expected_id and not same(name.lower(), expected_id.lower()):
         limiter("login").fail(key)
-        return bad("That ID or passcode is not right.", 401, "wrong_passcode")
+        return bad("That name isn't recognised for responder access.", 401, "name_not_allowed")
 
     limiter("login").clear(key)
     session.clear()
@@ -490,6 +489,27 @@ def flood_scenario():
 def flood_scenario_roads():
     """The roads the flood scenario would close, so planners can test it without publishing."""
     return jsonify(roads=story().flood_roads())
+
+
+@bp.get("/history")
+def past_floods():
+    """Past cyclones and floods in this area, for reference (see data/history.json)."""
+    return jsonify(current_app.extensions["saferoute.history"])
+
+
+@bp.get("/scenario/presets")
+def scenario_presets():
+    return jsonify(presets=story().preset_ids())
+
+
+@bp.post("/scenario/preset/<preset_id>")
+@responder_required
+def scenario_preset(preset_id: str):
+    """Set up one known test case: calm, rain, closure, shelter full or rescue request."""
+    if not story().preset(preset_id, session["responder"]):
+        return bad("Unknown test case.", 404)
+    kick()
+    return jsonify(loaded=preset_id, version=store().version())
 
 
 @bp.post("/story/<action>")

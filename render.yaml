@@ -1,9 +1,9 @@
 # Render blueprint: a free, public demo of SafeRoute.
 # Deploy from the Render dashboard (New > Blueprint) and pick this repository.
 #
-# Render generates the responder passcode, sensor device key and session secret; find them under
-# the service's Environment tab. The free plan's disk is temporary, so every restart starts with a
-# clean map (no closures), which suits a demo.
+# Render generates the sensor device key and session secret; find them under the service's
+# Environment tab. Responders sign in with a name alone (no passcode). The free plan's disk is
+# temporary, so every restart starts with a clean map (no closures), which suits a demo.
 services:
   - type: web
     name: saferoute-demo
@@ -15,8 +15,6 @@ services:
     healthCheckPath: /healthz
     envVars:
       - key: SAFEROUTE_SECRET_KEY
-        generateValue: true
-      - key: SAFEROUTE_RESPONDER_PASSCODE
         generateValue: true
       - key: SAFEROUTE_SENSOR_KEY
         generateValue: true
